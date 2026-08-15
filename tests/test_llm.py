@@ -268,14 +268,14 @@ class TestAnalyzeComplexity:
 
         provider = PydanticAIProvider(provider="openai", model=FunctionModel(capture))
         result = provider.analyze_complexity(
-            prompt="SYSTEM-RUBRIC-MARKER",
+            prompt="RUBRIC",
             diff_excerpt="diff content",
             stats_json="{}",
             title="Title",
         )
 
         assert result["complexity"] == 4
-        assert seen["req"].instructions == "SYSTEM-RUBRIC-MARKER"
+        assert seen["req"].instructions == "RUBRIC"
 
     def test_analyze_complexity_success_openai(self):
         """Test successful complexity analysis with OpenAI provider using TestModel."""
