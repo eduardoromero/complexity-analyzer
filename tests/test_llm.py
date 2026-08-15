@@ -291,83 +291,35 @@ class TestAnalyzeComplexity:
         assert result["model"] == "test"
         assert isinstance(result["tokens"], int)
 
-    def test_analyze_complexity_out_of_bounds_no_retry_amplification(self):
-        """Test out-of-bounds complexity fails fast with parse/validate message without 12x retry blowup."""
-        request_count = 0
-        original_request = TestModel.request
-
-        async def counting_request(self, *args, **kwargs):
-            nonlocal request_count
-            request_count += 1
-            return await original_request(self, *args, **kwargs)
-
+    def test_analyze_complexity_out_of_bounds_fails_fast_with_schema_error(self):
+        """Test out-of-bounds complexity fails with descriptive schema validation error."""
         test_model = TestModel(
             custom_output_args={"complexity": 15, "explanation": "Out of bounds"}
         )
         provider = PydanticAIProvider(provider="openai", model=test_model)
 
-        with patch.object(TestModel, "request", counting_request):
-            with pytest.raises(LLMError, match="Failed to parse or validate LLM response"):
-                provider.analyze_complexity(
-                    prompt="Analyze",
-                    diff_excerpt="diff",
-                    stats_json="{}",
-                    title="Title",
-                    max_retries=3,
-                )
-
-        # 1 initial request + 1 in-run retry by agent = 2 requests total (not 12!)
-        assert request_count <= 2
-
-    @patch("cli.llm.time.sleep")
-    def test_analyze_complexity_retry_on_transient_error(self, mock_sleep):
-        """Test retry logic on transient errors."""
-        test_model = TestModel(
-            custom_output_args={"complexity": 3, "explanation": "Low complexity"}
-        )
-        provider = PydanticAIProvider(provider="openai", model=test_model)
-
-        # Mock agent run_sync to fail on first attempt, succeed on second
-        original_run_sync = provider._agent.run_sync
-        attempts = 0
-
-        def failing_run_sync(*args, **kwargs):
-            nonlocal attempts
-            attempts += 1
-            if attempts == 1:
-                raise Exception("Temporary network glitch")
-            return original_run_sync(*args, **kwargs)
-
-        with patch.object(provider._agent, "run_sync", side_effect=failing_run_sync):
-            result = provider.analyze_complexity(
+        with pytest.raises(LLMError, match="Failed to parse or validate LLM response"):
+            provider.analyze_complexity(
                 prompt="Analyze",
                 diff_excerpt="diff",
                 stats_json="{}",
                 title="Title",
-                max_retries=3,
             )
 
-            assert result["complexity"] == 3
-            assert result["explanation"] == "Low complexity"
-            assert isinstance(result["tokens"], int)
-            assert attempts == 2
-            mock_sleep.assert_called_once()
-
-    def test_analyze_complexity_all_retries_fail(self):
-        """Test behavior when all transient retries fail."""
+    def test_analyze_complexity_api_error_handling(self):
+        """Test API errors from provider are caught and wrapped as LLMError."""
         test_model = TestModel()
         provider = PydanticAIProvider(provider="openai", model=test_model)
 
         with patch.object(
-            provider._agent, "run_sync", side_effect=Exception("Persistent API error")
+            provider._agent, "run_sync", side_effect=Exception("API connection refused")
         ):
-            with pytest.raises(LLMError, match="openai API error after 2 attempts"):
+            with pytest.raises(LLMError, match="openai API error: API connection refused"):
                 provider.analyze_complexity(
                     prompt="Analyze",
                     diff_excerpt="diff",
                     stats_json="{}",
                     title="Title",
-                    max_retries=2,
                 )
 
 

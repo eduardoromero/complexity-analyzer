@@ -1,6 +1,5 @@
 """PydanticAI powered LLM providers and schema validation."""
 
-import time
 from typing import Any, Dict, Optional, Union
 
 import httpx
@@ -17,7 +16,6 @@ from .config import get_gemini_api_key, get_openai_api_key, get_openai_base_url
 from .constants import (
     DEFAULT_MAX_RETRIES,
     DEFAULT_MODEL,
-    DEFAULT_RETRY_DELAY,
     DEFAULT_TIMEOUT,
 )
 from .llm_base import LLMProvider
@@ -38,6 +36,7 @@ class PydanticAIProvider(LLMProvider):
         model: Optional[Union[str, Model]] = None,
         timeout: float = DEFAULT_TIMEOUT,
         base_url: Optional[str] = None,
+        retries: int = DEFAULT_MAX_RETRIES,
     ):
         """
         Initialize PydanticAI provider.
@@ -48,6 +47,7 @@ class PydanticAIProvider(LLMProvider):
             model: Model name string or Model instance
             timeout: Request timeout in seconds
             base_url: Optional base URL for OpenAI-compatible API endpoints
+            retries: Number of schema validation retries handled natively by PydanticAI
         """
         self._provider_name = provider.lower().strip() if isinstance(provider, str) else "openai"
         self._timeout = timeout
@@ -56,7 +56,7 @@ class PydanticAIProvider(LLMProvider):
         if isinstance(model, Model):
             self._model_instance = model
             self._model_name = getattr(model, "model_name", "test-model")
-            self._agent = Agent(self._model_instance, output_type=ComplexityResult, retries=1)
+            self._agent = Agent(self._model_instance, output_type=ComplexityResult, retries=retries)
             return
 
         if self._provider_name in ("gemini", "google"):
@@ -105,7 +105,7 @@ class PydanticAIProvider(LLMProvider):
         else:
             raise LLMError(f"Unsupported provider: '{provider}'")
 
-        self._agent = Agent(self._model_instance, output_type=ComplexityResult, retries=1)
+        self._agent = Agent(self._model_instance, output_type=ComplexityResult, retries=retries)
 
     @property
     def provider_name(self) -> str:
@@ -129,8 +129,8 @@ class PydanticAIProvider(LLMProvider):
         diff_excerpt: str,
         stats_json: str,
         title: str,
-        max_retries: int = DEFAULT_MAX_RETRIES,
-        retry_delay: float = DEFAULT_RETRY_DELAY,
+        max_retries: Optional[int] = None,
+        retry_delay: Optional[float] = None,
     ) -> Dict[str, Any]:
         """
         Analyze PR complexity using PydanticAI and return score with explanation.
@@ -140,55 +140,46 @@ class PydanticAIProvider(LLMProvider):
             diff_excerpt: Formatted diff excerpt
             stats_json: JSON string with stats
             title: PR title
-            max_retries: Maximum retry attempts
-            retry_delay: Initial delay between retries (exponential backoff)
+            max_retries: Optional retry attempts override (maintained for compatibility)
+            retry_delay: Optional retry delay (maintained for compatibility)
 
         Returns:
             Dict with 'complexity' (int 1..10), 'explanation' (str),
             'provider' (str), 'model' (str), and 'tokens' (int or None)
 
         Raises:
-            LLMError: If analysis fails after retries
+            LLMError: If analysis fails
         """
         user_prompt = (
             f"diff_excerpt:\n{diff_excerpt}\n\nstats_json:\n{stats_json}\n\ntitle:\n{title}"
         )
 
-        for attempt in range(max_retries):
-            try:
-                result = self._agent.run_sync(user_prompt, instructions=prompt)
+        try:
+            result = self._agent.run_sync(user_prompt, instructions=prompt)
 
-                output = result.output
-                tokens = None
-                if hasattr(result, "usage") and result.usage is not None:
-                    usage = result.usage() if callable(result.usage) else result.usage
-                    if usage is not None:
-                        tokens = getattr(usage, "total_tokens", None)
+            output = result.output
+            tokens = None
+            if hasattr(result, "usage") and result.usage is not None:
+                usage = result.usage() if callable(result.usage) else result.usage
+                if usage is not None:
+                    tokens = getattr(usage, "total_tokens", None)
 
-                return {
-                    "complexity": output.complexity,
-                    "explanation": output.explanation,
-                    "provider": self.provider_name,
-                    "model": self.model_name,
-                    "tokens": tokens,
-                }
+            return {
+                "complexity": output.complexity,
+                "explanation": output.explanation,
+                "provider": self.provider_name,
+                "model": self.model_name,
+                "tokens": tokens,
+            }
 
-            except UnexpectedModelBehavior as e:
-                # Schema / output validation failures are deterministic after agent in-run retries
-                raise LLMError(
-                    f"Failed to parse or validate LLM response from {self.provider_name}: {e}"
-                ) from e
-            except LLMError:
-                raise
-            except Exception as e:
-                if attempt < max_retries - 1:
-                    delay = retry_delay * (2**attempt)
-                    delay += (time.time() % 1) * 0.1
-                    time.sleep(delay)
-                    continue
-                raise LLMError(
-                    f"{self.provider_name} API error after {max_retries} attempts: {e}"
-                ) from e
+        except UnexpectedModelBehavior as e:
+            raise LLMError(
+                f"Failed to parse or validate LLM response from {self.provider_name}: {e}"
+            ) from e
+        except LLMError:
+            raise
+        except Exception as e:
+            raise LLMError(f"{self.provider_name} API error: {e}") from e
 
 
 class OpenAIProvider(PydanticAIProvider):
@@ -200,6 +191,7 @@ class OpenAIProvider(PydanticAIProvider):
         model: str = DEFAULT_MODEL,
         timeout: float = DEFAULT_TIMEOUT,
         base_url: Optional[str] = None,
+        retries: int = DEFAULT_MAX_RETRIES,
     ):
         """Initialize OpenAI provider."""
         super().__init__(
@@ -208,6 +200,7 @@ class OpenAIProvider(PydanticAIProvider):
             model=model,
             timeout=timeout,
             base_url=base_url,
+            retries=retries,
         )
 
 
@@ -220,6 +213,7 @@ class GeminiProvider(PydanticAIProvider):
         model: str = "gemini-2.5-flash",
         timeout: float = DEFAULT_TIMEOUT,
         base_url: Optional[str] = None,
+        retries: int = DEFAULT_MAX_RETRIES,
     ):
         """Initialize Gemini provider."""
         super().__init__(
@@ -228,6 +222,7 @@ class GeminiProvider(PydanticAIProvider):
             model=model,
             timeout=timeout,
             base_url=base_url,
+            retries=retries,
         )
 
 
@@ -237,6 +232,7 @@ def get_provider(
     model: Optional[str] = None,
     base_url: Optional[str] = None,
     timeout: float = DEFAULT_TIMEOUT,
+    retries: int = DEFAULT_MAX_RETRIES,
 ) -> LLMProvider:
     """
     Factory function to get an LLM provider instance.
@@ -247,6 +243,7 @@ def get_provider(
         model: Model name to use
         base_url: Optional base URL for API endpoints
         timeout: Request timeout in seconds
+        retries: Number of schema validation retries
 
     Returns:
         LLMProvider instance
@@ -259,6 +256,7 @@ def get_provider(
             model=model or DEFAULT_MODEL,
             timeout=timeout,
             base_url=base_url,
+            retries=retries,
         )
     elif normalized_provider in ("gemini", "google"):
         return GeminiProvider(
@@ -266,6 +264,7 @@ def get_provider(
             model=model or "gemini-2.5-flash",
             timeout=timeout,
             base_url=base_url,
+            retries=retries,
         )
     elif normalized_provider == "auto":
         if api_key:
@@ -275,6 +274,7 @@ def get_provider(
                     model=model or "gemini-2.5-flash",
                     timeout=timeout,
                     base_url=base_url,
+                    retries=retries,
                 )
             elif api_key.startswith("sk-"):
                 return OpenAIProvider(
@@ -282,6 +282,7 @@ def get_provider(
                     model=model or DEFAULT_MODEL,
                     timeout=timeout,
                     base_url=base_url,
+                    retries=retries,
                 )
             else:
                 raise LLMError(
@@ -295,6 +296,7 @@ def get_provider(
                 model=model or "gemini-2.5-flash",
                 timeout=timeout,
                 base_url=base_url,
+                retries=retries,
             )
         elif openai_key:
             return OpenAIProvider(
@@ -302,6 +304,7 @@ def get_provider(
                 model=model or DEFAULT_MODEL,
                 timeout=timeout,
                 base_url=base_url,
+                retries=retries,
             )
         else:
             raise LLMError(
