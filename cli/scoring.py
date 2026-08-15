@@ -2,7 +2,24 @@
 
 import json
 import re
-from typing import Dict, Any
+from typing import Any, Dict
+
+from pydantic import BaseModel, Field
+
+
+class ComplexityResult(BaseModel):
+    """Structured response schema for PR complexity analysis."""
+
+    complexity: int = Field(
+        ...,
+        ge=1,
+        le=10,
+        description="Complexity score from 1 (trivial) to 10 (extreme)",
+    )
+    explanation: str = Field(
+        ...,
+        description="Explanation of the assigned complexity score",
+    )
 
 
 class InvalidResponseError(Exception):
