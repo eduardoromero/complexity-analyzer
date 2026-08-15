@@ -6,14 +6,19 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
-from .config import validate_owner_repo, validate_pr_number
+from .config import (
+    get_gemini_api_key,
+    get_openai_api_key,
+    validate_owner_repo,
+    validate_pr_number,
+)
 from .config_types import AnalysisConfig
+from .constants import DEFAULT_MODEL
 from .github import fetch_pr, fetch_pr_with_rotation
 from .io_safety import read_text_file
-from .llm import OpenAIProvider
+from .llm import LLMError, get_provider
 from .preprocess import make_prompt_input, process_diff
 from .utils import parse_pr_url
-
 _SYNC_TITLE_RE = re.compile(
     r"synced (?:local )?file\(s\)",
     re.IGNORECASE,
@@ -110,8 +115,33 @@ def analyze_single_pr(
         LLMError: If LLM call fails
         InvalidResponseError: If LLM response is invalid
     """
-    if not config.openai_key:
-        raise ValueError("OpenAI API key is required")
+    resolved_gemini_key = config.gemini_key or get_gemini_api_key()
+    resolved_openai_key = config.openai_key or get_openai_api_key()
+
+    effective_provider = (config.provider or "auto").lower().strip()
+    if effective_provider == "auto":
+        if resolved_gemini_key and not resolved_openai_key:
+            effective_provider = "gemini"
+        else:
+            effective_provider = "openai"
+
+    if effective_provider in ("gemini", "google"):
+        effective_key = resolved_gemini_key
+        if not effective_key:
+            raise ValueError(
+                "Gemini API key is required. Set GEMINI_API_KEY or GOOGLE_API_KEY or pass --gemini-api-key."
+            )
+        effective_model = (
+            "gemini-2.5-flash"
+            if (config.model == DEFAULT_MODEL or not config.model)
+            else config.model
+        )
+    else:
+        effective_provider = "openai"
+        effective_key = resolved_openai_key
+        if not effective_key:
+            raise ValueError("Either GEMINI_API_KEY or OPENAI_API_KEY is required")
+        effective_model = config.model or DEFAULT_MODEL
 
     # Parse PR URL
     owner, repo, pr = parse_pr_url(pr_url)
@@ -173,7 +203,12 @@ def analyze_single_pr(
     diff_for_prompt = make_prompt_input(pr_url, title, stats, selected_files, truncated_diff)
 
     # Call LLM
-    provider = OpenAIProvider(config.openai_key, model=config.model, timeout=config.timeout)
+    provider = get_provider(
+        provider=effective_provider,
+        api_key=effective_key,
+        model=effective_model,
+        timeout=config.timeout,
+    )
     result = provider.analyze_complexity(
         prompt=prompt_text,
         diff_excerpt=diff_for_prompt,
@@ -185,8 +220,8 @@ def analyze_single_pr(
     return {
         "score": result["complexity"],
         "explanation": result["explanation"],
-        "provider": result.get("provider", "openai"),
-        "model": result.get("model", config.model),
+        "provider": result.get("provider", effective_provider),
+        "model": result.get("model", effective_model),
         "tokens": result.get("tokens"),
         "timestamp": datetime.utcnow().isoformat() + "Z",
         "repo": f"{owner}/{repo}",

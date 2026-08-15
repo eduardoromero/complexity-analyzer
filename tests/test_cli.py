@@ -78,6 +78,69 @@ class TestAnalyzePrCommand:
         assert "--timeout" in output
         assert "--dry-run" in output
         assert "--verbose" in output
+        assert "--provider" in output or "-p" in output
+        assert "--gemini-api-key" in output
+        assert "--openai-api-key" in output
+
+    @patch("cli.main.fetch_pr")
+    @patch("cli.main.get_provider")
+    def test_auto_detect_gemini_provider(self, mock_get_provider, mock_fetch):
+        """Test auto-detection selects gemini when GEMINI_API_KEY is present and no OPENAI_API_KEY."""
+        mock_fetch.return_value = (
+            "diff --git a/file.py b/file.py\n+line1",
+            {"title": "Test PR", "additions": 10, "deletions": 5, "files": [], "changed_files": 1},
+        )
+        mock_prov_instance = mock_get_provider.return_value
+        mock_prov_instance.analyze_complexity.return_value = {
+            "complexity": 5,
+            "explanation": "Medium",
+            "provider": "gemini",
+            "model": "gemini-2.5-flash",
+        }
+
+        with patch.dict("os.environ", {"GEMINI_API_KEY": "gemini-secret"}, clear=True):
+            result = runner.invoke(
+                app, ["analyze-pr", "https://github.com/owner/repo/pull/123"]
+            )
+            assert result.exit_code == 0
+            mock_get_provider.assert_called_once()
+            call_kwargs = mock_get_provider.call_args.kwargs
+            assert call_kwargs["provider"] == "gemini"
+            assert call_kwargs["api_key"] == "gemini-secret"
+            assert call_kwargs["model"] == "gemini-2.5-flash"
+
+    @patch("cli.main.fetch_pr")
+    @patch("cli.main.get_provider")
+    def test_explicit_provider_option(self, mock_get_provider, mock_fetch):
+        """Test explicit --provider option is respected."""
+        mock_fetch.return_value = (
+            "diff --git a/file.py b/file.py\n+line1",
+            {"title": "Test PR", "additions": 10, "deletions": 5, "files": [], "changed_files": 1},
+        )
+        mock_prov_instance = mock_get_provider.return_value
+        mock_prov_instance.analyze_complexity.return_value = {
+            "complexity": 3,
+            "explanation": "Low",
+            "provider": "gemini",
+            "model": "gemini-2.5-flash",
+        }
+
+        result = runner.invoke(
+            app,
+            [
+                "analyze-pr",
+                "https://github.com/owner/repo/pull/123",
+                "--provider",
+                "gemini",
+                "--gemini-api-key",
+                "test-gemini-key",
+            ],
+        )
+        assert result.exit_code == 0
+        mock_get_provider.assert_called_once()
+        call_kwargs = mock_get_provider.call_args.kwargs
+        assert call_kwargs["provider"] == "gemini"
+        assert call_kwargs["api_key"] == "test-gemini-key"
 
 
 class TestRateLimitCommand:

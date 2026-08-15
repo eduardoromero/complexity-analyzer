@@ -11,9 +11,16 @@ inputs:
     description: 'GitHub PR URL (e.g., https://github.com/owner/repo/pull/123)'
     required: false
     default: ${{ github.event.pull_request.html_url }}
+  provider:
+    description: 'LLM provider: gemini, openai, or auto'
+    required: false
+    default: 'auto'
+  gemini-api-key:
+    description: 'Gemini / Google AI Studio API key'
+    required: false
   openai-api-key:
     description: 'OpenAI API key for LLM analysis'
-    required: true
+    required: false
   github-token:
     description: 'GitHub token for API access (defaults to GITHUB_TOKEN)'
     required: false
@@ -64,6 +71,10 @@ runs:
   image: 'Dockerfile'
   args:
     - 'analyze-pr'
+    - '--provider'
+    - '${{ inputs.provider }}'
+    - '--gemini-api-key'
+    - '${{ inputs.gemini-api-key }}'
     - '--openai-api-key'
     - '${{ inputs.openai-api-key }}'
     - '--github-token'

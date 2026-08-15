@@ -19,6 +19,7 @@ from .batch import (  # noqa: E402
     load_pr_urls_from_file,
 )
 from .config import (  # noqa: E402
+    get_gemini_api_key,
     get_github_token,
     get_github_tokens,
     get_openai_api_key,
@@ -43,7 +44,7 @@ from .github import (  # noqa: E402
     update_complexity_label,
 )
 from .io_safety import normalize_path, write_json_atomic  # noqa: E402
-from .llm import LLMError, OpenAIProvider  # noqa: E402
+from .llm import LLMError, get_provider  # noqa: E402
 from .logging_config import get_logger, setup_logging  # noqa: E402
 from .preprocess import make_prompt_input, process_diff  # noqa: E402
 from .scoring import InvalidResponseError  # noqa: E402
@@ -62,7 +63,7 @@ def analyze_pr_to_dict(
     pr_url: str,
     prompt_text: str,
     github_token: Optional[str],
-    openai_key: str,
+    openai_key: Optional[str] = None,
     model: str = DEFAULT_MODEL,
     timeout: float = DEFAULT_TIMEOUT,
     max_tokens: int = DEFAULT_MAX_TOKENS,
@@ -71,6 +72,8 @@ def analyze_pr_to_dict(
     progress_callback: Optional[Callable[[str], None]] = None,
     token_rotator: Optional[TokenRotator] = None,
     base_url: Optional[str] = None,
+    provider: str = "auto",
+    gemini_key: Optional[str] = None,
 ) -> dict:
     """
     Analyze a GitHub PR and return result as dictionary.
@@ -82,14 +85,17 @@ def analyze_pr_to_dict(
         pr_url: GitHub PR URL
         prompt_text: Prompt text for LLM
         github_token: GitHub API token (optional, ignored if token_rotator is provided)
-        openai_key: OpenAI API key (required)
-        model: OpenAI model name
+        openai_key: OpenAI API key (optional)
+        model: Model name
         timeout: Request timeout in seconds
         max_tokens: Maximum tokens for diff excerpt
         hunks_per_file: Maximum hunks per file
         sleep_seconds: Sleep between GitHub API calls
         progress_callback: Optional callback for progress messages (e.g., rate limit warnings)
         token_rotator: Optional TokenRotator for automatic token rotation on rate limits
+        base_url: Base URL for OpenAI-compatible API
+        provider: LLM provider name ("auto", "gemini", "openai")
+        gemini_key: Gemini API key (optional)
 
     Returns:
         Dict with keys: score, explanation, provider, model, tokens, timestamp,
@@ -101,6 +107,34 @@ def analyze_pr_to_dict(
         LLMError: If LLM call fails
         InvalidResponseError: If LLM response is invalid
     """
+    resolved_gemini_key = gemini_key or get_gemini_api_key()
+    resolved_openai_key = openai_key or get_openai_api_key()
+
+    effective_provider = (provider or "auto").lower().strip()
+    if effective_provider == "auto":
+        if resolved_gemini_key and not resolved_openai_key:
+            effective_provider = "gemini"
+        else:
+            effective_provider = "openai"
+
+    if effective_provider in ("gemini", "google"):
+        effective_key = resolved_gemini_key
+        if not effective_key:
+            raise ValueError(
+                "Gemini API key is required. Set GEMINI_API_KEY or GOOGLE_API_KEY or pass --gemini-api-key."
+            )
+        effective_model = (
+            "gemini-2.5-flash"
+            if (model == DEFAULT_MODEL or not model)
+            else model
+        )
+    else:
+        effective_provider = "openai"
+        effective_key = resolved_openai_key
+        if not effective_key:
+            raise ValueError("Either GEMINI_API_KEY or OPENAI_API_KEY is required")
+        effective_model = model or DEFAULT_MODEL
+
     # Parse PR URL
     owner, repo, pr = parse_pr_url(pr_url)
     validate_owner_repo(owner, repo)
@@ -156,8 +190,14 @@ def analyze_pr_to_dict(
     diff_for_prompt = make_prompt_input(pr_url, title, stats, selected_files, truncated_diff)
 
     # Call LLM
-    provider = OpenAIProvider(openai_key, model=model, timeout=timeout, base_url=base_url)
-    result = provider.analyze_complexity(
+    provider_inst = get_provider(
+        provider=effective_provider,
+        api_key=effective_key,
+        model=effective_model,
+        timeout=timeout,
+        base_url=base_url if effective_provider == "openai" else None,
+    )
+    result = provider_inst.analyze_complexity(
         prompt=prompt_text,
         diff_excerpt=diff_for_prompt,
         stats_json=json.dumps(stats),
@@ -168,8 +208,8 @@ def analyze_pr_to_dict(
     output = {
         "score": result["complexity"],
         "explanation": result["explanation"],
-        "provider": result.get("provider", "openai"),
-        "model": result.get("model", model),
+        "provider": result.get("provider", effective_provider),
+        "model": result.get("model", effective_model),
         "tokens": result.get("tokens"),
         "timestamp": datetime.utcnow().isoformat() + "Z",
         "repo": f"{owner}/{repo}",
@@ -197,13 +237,16 @@ def _analyze_pr_impl(
     github_token: Optional[str] = None,
     verbose: bool = False,
     base_url: Optional[str] = None,
+    provider: str = "auto",
+    gemini_api_key: Optional[str] = None,
 ):
     """
     Analyze a GitHub PR and compute complexity score.
 
     Environment variables:
     - GH_TOKEN or GITHUB_TOKEN: GitHub API token (optional for public repos)
-    - OPENAI_API_KEY: OpenAI API key (required)
+    - OPENAI_API_KEY: OpenAI API key
+    - GEMINI_API_KEY or GOOGLE_API_KEY: Gemini API key
     """
     # Set up logging if verbose
     if verbose:
@@ -218,13 +261,34 @@ def _analyze_pr_impl(
         # Get credentials (arg takes precedence over env)
         final_github_token = github_token or get_github_token()
         final_openai_key = openai_api_key or get_openai_api_key()
+        final_gemini_key = gemini_api_key or get_gemini_api_key()
 
-        if not final_openai_key:
+        # Check key requirements based on provider
+        effective_provider = (provider or "auto").lower().strip()
+        if effective_provider == "auto":
+            if final_gemini_key and not final_openai_key:
+                effective_provider = "gemini"
+            else:
+                effective_provider = "openai"
+
+        if effective_provider in ("gemini", "google") and not final_gemini_key:
             typer.echo(
-                "Error: OPENAI_API_KEY environment variable or argument is required", err=True
+                "Error: GEMINI_API_KEY or GOOGLE_API_KEY environment variable or argument is required",
+                err=True,
             )
             typer.echo(
-                "Set it with: export OPENAI_API_KEY='your-key' or pass --openai-api-key", err=True
+                "Set either GEMINI_API_KEY or OPENAI_API_KEY, or pass --gemini-api-key",
+                err=True,
+            )
+            raise typer.Exit(1)
+        elif effective_provider == "openai" and not final_openai_key and not final_gemini_key:
+            typer.echo(
+                "Error: OPENAI_API_KEY or GEMINI_API_KEY environment variable or argument is required",
+                err=True,
+            )
+            typer.echo(
+                "Set either GEMINI_API_KEY or OPENAI_API_KEY, or pass --gemini-api-key or --openai-api-key",
+                err=True,
             )
             raise typer.Exit(1)
 
@@ -276,6 +340,8 @@ def _analyze_pr_impl(
                 prompt_text=prompt_text,
                 github_token=final_github_token,
                 openai_key=final_openai_key,
+                gemini_key=final_gemini_key,
+                provider=provider,
                 model=model,
                 timeout=timeout,
                 max_tokens=max_tokens,
@@ -402,9 +468,12 @@ def analyze_pr(
         None, help="GitHub PR URL. If not provided, will try to infer from GitHub Actions context."
     ),
     prompt_file: Optional[Path] = typer.Option(
-        None, "--prompt-file", "-p", help="Path to custom prompt file (default: embedded prompt)"
+        None, "--prompt-file", help="Path to custom prompt file (default: embedded prompt)"
     ),
-    model: str = typer.Option(DEFAULT_MODEL, "--model", "-m", help="OpenAI model name"),
+    provider: str = typer.Option(
+        "auto", "--provider", "-p", help="LLM provider: gemini, openai, or auto"
+    ),
+    model: str = typer.Option(DEFAULT_MODEL, "--model", "-m", help="OpenAI or Gemini model name"),
     format: str = typer.Option("json", "--format", "-f", help="Output format: json or markdown"),
     output_file: Optional[Path] = typer.Option(
         None, "--output-file", "-o", help="Write output to file"
@@ -422,6 +491,9 @@ def analyze_pr(
         DEFAULT_SLEEP_SECONDS, "--sleep-seconds", help="Sleep between GitHub API calls"
     ),
     dry_run: bool = typer.Option(False, "--dry-run", help="Fetch PR but don't call LLM"),
+    gemini_api_key: Optional[str] = typer.Option(
+        None, "--gemini-api-key", help="Gemini / Google AI Studio API key"
+    ),
     openai_api_key: Optional[str] = typer.Option(None, "--openai-api-key", help="OpenAI API key"),
     github_token: Optional[str] = typer.Option(None, "--github-token", help="GitHub token"),
     api_base_url: Optional[str] = typer.Option(
@@ -454,6 +526,8 @@ def analyze_pr(
         sleep_seconds=sleep_seconds,
         dry_run=dry_run,
         openai_api_key=openai_api_key,
+        gemini_api_key=gemini_api_key,
+        provider=provider,
         github_token=github_token,
         verbose=verbose,
         base_url=api_base_url or get_openai_base_url(),

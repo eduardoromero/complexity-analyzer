@@ -75,7 +75,7 @@ class ErrorHandler:
             typer.echo("  Hint: Wait before retrying or use a different API key", err=True)
         elif "authentication" in error_str or "401" in error_str:
             typer.echo("Error: LLM authentication failed", err=True)
-            typer.echo("  Hint: Check your OPENAI_API_KEY is valid", err=True)
+            typer.echo("  Hint: Check your OPENAI_API_KEY or GEMINI_API_KEY is valid", err=True)
         elif "timeout" in error_str:
             typer.echo("Error: LLM request timed out", err=True)
             typer.echo("  Hint: Try increasing --timeout or simplify the request", err=True)
