@@ -3,7 +3,12 @@
 import os
 import pytest
 from unittest.mock import patch
-from cli.config import validate_owner_repo, validate_pr_number, get_github_tokens
+from cli.config import (
+    validate_owner_repo,
+    validate_pr_number,
+    get_github_tokens,
+    get_gemini_api_key,
+)
 from cli.config_types import AnalysisConfig, BatchConfig, OutputConfig
 
 
@@ -99,6 +104,37 @@ class TestGetGitHubTokens:
         assert tokens == ["fallback"]
 
 
+# get_gemini_api_key tests
+
+
+class TestGetGeminiApiKey:
+    """Tests for the get_gemini_api_key function."""
+
+    @patch.dict(os.environ, {}, clear=True)
+    def test_no_key_returns_none(self):
+        """Test that None is returned when no key is set."""
+        assert get_gemini_api_key() is None
+
+    @patch.dict(os.environ, {"GEMINI_API_KEY": "gemini_key"}, clear=True)
+    def test_key_from_gemini_api_key(self):
+        """Test getting key from GEMINI_API_KEY."""
+        assert get_gemini_api_key() == "gemini_key"
+
+    @patch.dict(os.environ, {"GOOGLE_API_KEY": "google_key"}, clear=True)
+    def test_key_from_google_api_key(self):
+        """Test getting key from GOOGLE_API_KEY fallback."""
+        assert get_gemini_api_key() == "google_key"
+
+    @patch.dict(
+        os.environ,
+        {"GEMINI_API_KEY": "gemini_key", "GOOGLE_API_KEY": "google_key"},
+        clear=True,
+    )
+    def test_gemini_api_key_takes_precedence(self):
+        """Test that GEMINI_API_KEY takes precedence over GOOGLE_API_KEY."""
+        assert get_gemini_api_key() == "gemini_key"
+
+
 # AnalysisConfig validation tests
 
 
@@ -152,6 +188,27 @@ class TestAnalysisConfigValidation:
             AnalysisConfig(model="")
         with pytest.raises(ValueError, match="model cannot be empty"):
             AnalysisConfig(model="   ")
+
+    def test_provider_defaults_to_auto(self):
+        """Test that provider defaults to 'auto'."""
+        config = AnalysisConfig()
+        assert config.provider == "auto"
+
+    def test_provider_accepts_valid_values(self):
+        """Test that provider accepts 'auto', 'gemini', and 'openai'."""
+        assert AnalysisConfig(provider="auto").provider == "auto"
+        assert AnalysisConfig(provider="gemini").provider == "gemini"
+        assert AnalysisConfig(provider="openai").provider == "openai"
+
+    def test_provider_rejects_invalid_values(self):
+        """Test that an invalid provider is rejected."""
+        with pytest.raises(ValueError, match="provider must be"):
+            AnalysisConfig(provider="anthropic")
+
+    def test_gemini_key_defaults_to_none(self):
+        """Test that gemini_key defaults to None."""
+        config = AnalysisConfig()
+        assert config.gemini_key is None
 
 
 # BatchConfig validation tests

@@ -55,6 +55,14 @@ def get_openai_api_key() -> Optional[str]:
     return os.getenv("OPENAI_API_KEY")
 
 
+def get_gemini_api_key() -> Optional[str]:
+    """Get Gemini API key from environment.
+
+    Checks GEMINI_API_KEY first, then falls back to GOOGLE_API_KEY.
+    """
+    return os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+
+
 def get_openai_base_url() -> Optional[str]:
     """Get base URL for OpenAI-compatible API from environment."""
     return os.getenv("OPENAI_BASE_URL") or None
