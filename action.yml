@@ -26,9 +26,9 @@ inputs:
     required: false
     default: ${{ github.token }}
   model:
-    description: 'OpenAI model name'
+    description: 'Model name (e.g. gpt-5.2, gemini-2.5-flash)'
     required: false
-    default: 'gpt-5.1'
+    default: ''
   format:
     description: 'Output format (json or markdown)'
     required: false
@@ -62,7 +62,7 @@ outputs:
   explanation:
     description: 'Explanation of the complexity score'
   model:
-    description: 'Model used for analysis (e.g., gpt-4, gpt-5.1)'
+    description: 'Model used for analysis (e.g., gpt-5.2, gemini-2.5-flash)'
   output:
     description: 'Full analysis result in JSON format'
 

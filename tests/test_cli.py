@@ -99,9 +99,7 @@ class TestAnalyzePrCommand:
         }
 
         with patch.dict("os.environ", {"GEMINI_API_KEY": "gemini-secret"}, clear=True):
-            result = runner.invoke(
-                app, ["analyze-pr", "https://github.com/owner/repo/pull/123"]
-            )
+            result = runner.invoke(app, ["analyze-pr", "https://github.com/owner/repo/pull/123"])
             assert result.exit_code == 0
             mock_get_provider.assert_called_once()
             call_kwargs = mock_get_provider.call_args.kwargs
@@ -141,6 +139,67 @@ class TestAnalyzePrCommand:
         call_kwargs = mock_get_provider.call_args.kwargs
         assert call_kwargs["provider"] == "gemini"
         assert call_kwargs["api_key"] == "test-gemini-key"
+
+    def test_invalid_provider_option(self):
+        """Test invalid --provider option raises clear error."""
+        result = runner.invoke(
+            app,
+            [
+                "analyze-pr",
+                "https://github.com/owner/repo/pull/123",
+                "--provider",
+                "anthropic",
+            ],
+        )
+        assert result.exit_code != 0
+        assert "Invalid provider" in result.output
+
+    @patch("cli.main.fetch_pr")
+    @patch("cli.main.get_provider")
+    def test_explicit_gemini_key_overrides_openai_env(self, mock_get_provider, mock_fetch):
+        """Test explicit --gemini-api-key on CLI takes precedence over ambient OPENAI_API_KEY env var."""
+        mock_fetch.return_value = (
+            "diff --git a/file.py b/file.py\n+line1",
+            {"title": "Test PR", "additions": 10, "deletions": 5, "files": [], "changed_files": 1},
+        )
+        mock_prov_instance = mock_get_provider.return_value
+        mock_prov_instance.analyze_complexity.return_value = {
+            "complexity": 4,
+            "explanation": "Medium",
+            "provider": "gemini",
+            "model": "gemini-2.5-flash",
+        }
+
+        with patch.dict("os.environ", {"OPENAI_API_KEY": "sk-ambient-secret"}, clear=True):
+            result = runner.invoke(
+                app,
+                [
+                    "analyze-pr",
+                    "https://github.com/owner/repo/pull/123",
+                    "--gemini-api-key",
+                    "AIza-explicit-key",
+                ],
+            )
+            assert result.exit_code == 0
+            mock_get_provider.assert_called_once()
+            call_kwargs = mock_get_provider.call_args.kwargs
+            assert call_kwargs["provider"] == "gemini"
+            assert call_kwargs["api_key"] == "AIza-explicit-key"
+
+    def test_explicit_openai_provider_without_openai_key_fails_preflight(self):
+        """Test explicit --provider openai without OpenAI key fails pre-flight with clean error."""
+        with patch.dict("os.environ", {"GEMINI_API_KEY": "AIza-secret"}, clear=True):
+            result = runner.invoke(
+                app,
+                [
+                    "analyze-pr",
+                    "https://github.com/owner/repo/pull/123",
+                    "--provider",
+                    "openai",
+                ],
+            )
+            assert result.exit_code != 0
+            assert "OPENAI_API_KEY" in result.output
 
 
 class TestRateLimitCommand:

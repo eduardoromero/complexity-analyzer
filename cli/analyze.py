@@ -16,9 +16,10 @@ from .config_types import AnalysisConfig
 from .constants import DEFAULT_MODEL
 from .github import fetch_pr, fetch_pr_with_rotation
 from .io_safety import read_text_file
-from .llm import LLMError, get_provider
+from .llm import get_provider
 from .preprocess import make_prompt_input, process_diff
 from .utils import parse_pr_url
+
 _SYNC_TITLE_RE = re.compile(
     r"synced (?:local )?file\(s\)",
     re.IGNORECASE,
@@ -119,28 +120,45 @@ def analyze_single_pr(
     resolved_openai_key = config.openai_key or get_openai_api_key()
 
     effective_provider = (config.provider or "auto").lower().strip()
+    if effective_provider not in ("auto", "gemini", "openai", "google"):
+        raise ValueError(
+            f"Invalid provider '{config.provider}'. Must be 'auto', 'gemini', or 'openai'."
+        )
+
     if effective_provider == "auto":
-        if resolved_gemini_key and not resolved_openai_key:
+        if config.gemini_key and not config.openai_key:
+            effective_provider = "gemini"
+        elif config.openai_key and not config.gemini_key:
+            effective_provider = "openai"
+        elif resolved_gemini_key and not resolved_openai_key:
             effective_provider = "gemini"
         else:
             effective_provider = "openai"
+    elif effective_provider in ("gemini", "google"):
+        effective_provider = "gemini"
+    else:
+        effective_provider = "openai"
 
-    if effective_provider in ("gemini", "google"):
+    if effective_provider == "gemini":
         effective_key = resolved_gemini_key
         if not effective_key:
+            if config.provider == "auto":
+                raise ValueError("Either GEMINI_API_KEY or OPENAI_API_KEY is required")
             raise ValueError(
-                "Gemini API key is required. Set GEMINI_API_KEY or GOOGLE_API_KEY or pass --gemini-api-key."
+                "GEMINI_API_KEY or GOOGLE_API_KEY environment variable or argument is required"
             )
         effective_model = (
             "gemini-2.5-flash"
-            if (config.model == DEFAULT_MODEL or not config.model)
+            if (not config.model or config.model == DEFAULT_MODEL or config.model == "")
             else config.model
         )
     else:
         effective_provider = "openai"
         effective_key = resolved_openai_key
         if not effective_key:
-            raise ValueError("Either GEMINI_API_KEY or OPENAI_API_KEY is required")
+            if config.provider == "auto":
+                raise ValueError("Either GEMINI_API_KEY or OPENAI_API_KEY is required")
+            raise ValueError("OPENAI_API_KEY environment variable or argument is required")
         effective_model = config.model or DEFAULT_MODEL
 
     # Parse PR URL
