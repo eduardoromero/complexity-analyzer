@@ -152,7 +152,7 @@ class TestAnalyzePrCommand:
             ],
         )
         assert result.exit_code != 0
-        assert "Invalid provider" in result.output
+        assert "Unsupported provider" in result.output or "Invalid provider" in result.output
 
     @patch("cli.main.fetch_pr")
     @patch("cli.main.get_provider")
@@ -283,6 +283,32 @@ class TestBatchAnalyzeCommand:
         assert "--until" in output
         assert "--workers" in output
         assert "--label" in output
+
+    @patch("cli.main.resolve_provider_credentials")
+    @patch("cli.main.load_pr_urls_from_file")
+    @patch("cli.main.run_batch_analysis_with_labels")
+    def test_batch_analyze_gemini_provider(self, mock_batch, mock_urls, mock_resolve):
+        """Test batch-analyze with gemini provider and key."""
+        mock_urls.return_value = ["https://github.com/owner/repo/pull/1"]
+        result = runner.invoke(
+            app,
+            [
+                "batch-analyze",
+                "--input-file",
+                "prs.txt",
+                "--output",
+                "out.csv",
+                "--provider",
+                "gemini",
+                "--gemini-api-key",
+                "test-gemini-key",
+            ],
+        )
+        assert result.exit_code == 0
+        mock_resolve.assert_called_once()
+        call_kwargs = mock_resolve.call_args.kwargs
+        assert call_kwargs["provider"] == "gemini"
+        assert call_kwargs["gemini_api_key"] == "test-gemini-key"
 
 
 class TestLabelPrCommand:

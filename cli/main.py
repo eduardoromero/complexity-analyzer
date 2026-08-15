@@ -29,6 +29,7 @@ from .config import (  # noqa: E402
     validate_pr_number,
 )
 from .constants import (  # noqa: E402
+    DEFAULT_GEMINI_MODEL,
     DEFAULT_HUNKS_PER_FILE,
     DEFAULT_MAX_TOKENS,
     DEFAULT_MODEL,
@@ -61,68 +62,59 @@ _OWNER_REPO_RE = re.compile(r"https?://github\.com/([^/\s]+)/([^/\s]+)/pull/(\d+
 
 
 def resolve_provider_credentials(
-    provider: str,
+    provider: str = "auto",
     openai_api_key: Optional[str] = None,
     gemini_api_key: Optional[str] = None,
-) -> tuple[str, str]:
+) -> tuple[str, Optional[str]]:
     """
-    Resolve provider name and API key, validating provider name and key requirements.
+    Resolve provider credentials and perform fast pre-flight auth validation.
 
     Returns:
         (effective_provider, effective_api_key)
 
     Raises:
-        ValueError: If provider is invalid or required API key is missing.
+        ValueError: If required API key is missing.
+        LLMError: If provider is unsupported.
     """
     prov_norm = (provider or "auto").lower().strip()
-    if prov_norm not in ("auto", "gemini", "openai", "google"):
-        raise ValueError(f"Invalid provider '{provider}'. Must be 'auto', 'gemini', or 'openai'.")
-
-    env_openai = get_openai_api_key()
-    env_gemini = get_gemini_api_key()
-
-    final_openai = openai_api_key or env_openai
-    final_gemini = gemini_api_key or env_gemini
+    gemini_key = gemini_api_key or get_gemini_api_key()
+    openai_key = openai_api_key or get_openai_api_key()
 
     if prov_norm == "auto":
         if gemini_api_key and not openai_api_key:
-            effective = "gemini"
+            effective_prov = "gemini"
+            effective_key = gemini_api_key
         elif openai_api_key and not gemini_api_key:
-            effective = "openai"
-        elif final_gemini and not final_openai:
-            effective = "gemini"
+            effective_prov = "openai"
+            effective_key = openai_api_key
+        elif gemini_key and not openai_key:
+            effective_prov = "gemini"
+            effective_key = gemini_key
         else:
-            effective = "openai"
+            effective_prov = "openai"
+            effective_key = openai_key
     elif prov_norm in ("gemini", "google"):
-        effective = "gemini"
+        effective_prov = "gemini"
+        effective_key = gemini_key
+        if not effective_key:
+            raise ValueError(
+                "GEMINI_API_KEY or GOOGLE_API_KEY environment variable or argument is required"
+            )
+    elif prov_norm in ("openai", "openai-chat"):
+        effective_prov = "openai"
+        effective_key = openai_key
+        if not effective_key:
+            raise ValueError("OPENAI_API_KEY environment variable or argument is required")
     else:
-        effective = "openai"
+        if prov_norm not in ("gemini", "google", "openai", "openai-chat", "auto"):
+            raise LLMError(f"Unsupported provider: '{provider}'")
+        effective_prov = prov_norm
+        effective_key = openai_key or gemini_key
 
-    if effective == "gemini":
-        if not final_gemini:
-            if prov_norm == "auto":
-                raise ValueError("Either GEMINI_API_KEY or OPENAI_API_KEY is required")
-            else:
-                raise ValueError(
-                    "GEMINI_API_KEY or GOOGLE_API_KEY environment variable or argument is required"
-                )
-        return effective, final_gemini
-    else:
-        if not final_openai:
-            if prov_norm == "auto":
-                raise ValueError("Either GEMINI_API_KEY or OPENAI_API_KEY is required")
-            else:
-                raise ValueError("OPENAI_API_KEY environment variable or argument is required")
-        return effective, final_openai
+    if prov_norm == "auto" and not gemini_key and not openai_key:
+        raise ValueError("Either GEMINI_API_KEY or OPENAI_API_KEY is required")
 
-
-def resolve_model_name(provider: str, model: Optional[str]) -> str:
-    """Resolve model name, substituting per-provider default if model is empty or DEFAULT_MODEL."""
-    if not model or model == DEFAULT_MODEL or model == "":
-        if provider in ("gemini", "google"):
-            return "gemini-2.5-flash"
-        return DEFAULT_MODEL
-    return model
+    return effective_prov, effective_key
 
 
 def analyze_pr_to_dict(
@@ -173,12 +165,28 @@ def analyze_pr_to_dict(
         LLMError: If LLM call fails
         InvalidResponseError: If LLM response is invalid
     """
-    effective_provider, effective_key = resolve_provider_credentials(
+    effective_prov, effective_key = resolve_provider_credentials(
         provider=provider,
         openai_api_key=openai_key,
         gemini_api_key=gemini_key,
     )
-    effective_model = resolve_model_name(effective_provider, model)
+
+    effective_model = (
+        DEFAULT_GEMINI_MODEL
+        if (
+            effective_prov in ("gemini", "google")
+            and (not model or model == DEFAULT_MODEL or model == "")
+        )
+        else (model or DEFAULT_MODEL)
+    )
+
+    provider_inst = get_provider(
+        provider=effective_prov,
+        api_key=effective_key,
+        model=effective_model,
+        timeout=timeout,
+        base_url=base_url,
+    )
 
     # Parse PR URL
     owner, repo, pr = parse_pr_url(pr_url)
@@ -235,13 +243,6 @@ def analyze_pr_to_dict(
     diff_for_prompt = make_prompt_input(pr_url, title, stats, selected_files, truncated_diff)
 
     # Call LLM
-    provider_inst = get_provider(
-        provider=effective_provider,
-        api_key=effective_key,
-        model=effective_model,
-        timeout=timeout,
-        base_url=base_url if effective_provider == "openai" else None,
-    )
     result = provider_inst.analyze_complexity(
         prompt=prompt_text,
         diff_excerpt=diff_for_prompt,
@@ -253,8 +254,8 @@ def analyze_pr_to_dict(
     output = {
         "score": result["complexity"],
         "explanation": result["explanation"],
-        "provider": result.get("provider", effective_provider),
-        "model": result.get("model", effective_model),
+        "provider": result.get("provider", provider_inst.provider),
+        "model": result.get("model", provider_inst.model_name),
         "tokens": result.get("tokens"),
         "timestamp": datetime.utcnow().isoformat() + "Z",
         "repo": f"{owner}/{repo}",
@@ -304,7 +305,7 @@ def _analyze_pr_impl(
         validate_pr_number(pr)
 
         # Pre-flight resolution and key validation
-        effective_provider, effective_key = resolve_provider_credentials(
+        resolve_provider_credentials(
             provider=provider,
             openai_api_key=openai_api_key,
             gemini_api_key=gemini_api_key,
@@ -462,7 +463,7 @@ def _analyze_pr_impl(
         raise typer.Exit(130)
     except typer.Exit:
         raise
-    except (ValueError, RuntimeError) as e:
+    except (ValueError, LLMError, RuntimeError) as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1)
     except Exception as e:
@@ -690,7 +691,7 @@ def batch_analyze(
         final_base_url = api_base_url or get_openai_base_url()
 
         # Pre-flight resolution and key validation
-        effective_provider, effective_key = resolve_provider_credentials(
+        resolve_provider_credentials(
             provider=provider,
             openai_api_key=openai_api_key,
             gemini_api_key=gemini_api_key,
@@ -826,7 +827,7 @@ def batch_analyze(
         raise typer.Exit(130)
     except typer.Exit:
         raise
-    except (ValueError, RuntimeError) as e:
+    except (ValueError, LLMError, RuntimeError) as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1)
     except Exception as e:
@@ -959,7 +960,7 @@ def label_pr(
         validate_pr_number(pr)
 
         # Pre-flight resolution and key validation
-        effective_provider, effective_key = resolve_provider_credentials(
+        resolve_provider_credentials(
             provider=provider,
             openai_api_key=openai_api_key,
             gemini_api_key=gemini_api_key,
@@ -1068,6 +1069,9 @@ def label_pr(
         raise typer.Exit(130)
     except typer.Exit:
         raise
+    except (ValueError, LLMError, RuntimeError) as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
     except Exception as e:
         ErrorHandler.handle_unexpected_error(e, debug=bool(os.getenv("DEBUG")))
         raise typer.Exit(1)
