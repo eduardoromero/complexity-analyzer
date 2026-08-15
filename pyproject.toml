@@ -22,7 +22,7 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
 ]
 dependencies = [
-    "pydantic-ai",
+    "pydantic-ai>=1.30.0,<2.0.0",
     "pydantic>=2.0.0",
     "google-genai",
     "openai>=1.0.0",

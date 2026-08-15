@@ -3,7 +3,6 @@
 from typing import Any, Dict, Optional, Union
 
 import httpx
-from openai import AsyncOpenAI
 from pydantic_ai import Agent
 from pydantic_ai.exceptions import UnexpectedModelBehavior
 from pydantic_ai.models import Model
@@ -14,12 +13,24 @@ from pydantic_ai.providers.openai import OpenAIProvider as PydanticOpenAIProvide
 
 from .config import get_gemini_api_key, get_openai_api_key, get_openai_base_url
 from .constants import (
+    DEFAULT_GEMINI_MODEL,
     DEFAULT_MAX_RETRIES,
     DEFAULT_MODEL,
     DEFAULT_TIMEOUT,
 )
 from .llm_base import LLMProvider
 from .scoring import ComplexityResult
+
+_GEMINI_PREFIXES = ("gemini:", "google-gla:", "google-vertex:", "google:")
+_OPENAI_PREFIXES = ("openai:", "openai-chat:")
+
+
+def _strip_prefix(name: str, prefixes: tuple[str, ...]) -> str:
+    """Strip provider prefix from model name if present."""
+    for prefix in prefixes:
+        if name.startswith(prefix):
+            return name.removeprefix(prefix)
+    return name
 
 
 class LLMError(Exception):
@@ -46,64 +57,49 @@ class PydanticAIProvider(LLMProvider):
             api_key: API key for the provider (or None to infer from environment)
             model: Model name string or Model instance
             timeout: Request timeout in seconds
-            base_url: Optional base URL for OpenAI-compatible API endpoints
+            base_url: Optional base URL for API endpoints
             retries: Number of schema validation retries handled natively by PydanticAI
         """
-        self._provider_name = provider.lower().strip() if isinstance(provider, str) else "openai"
-        self._timeout = timeout
-        self._base_url = base_url
+        self._provider_name = provider.lower().strip()
+
+        if self._provider_name not in ("openai", "openai-chat", "gemini", "google"):
+            raise LLMError(f"Unsupported provider: '{provider}'")
+
+        if self._provider_name == "google":
+            self._provider_name = "gemini"
 
         if isinstance(model, Model):
             self._model_instance = model
-            self._model_name = getattr(model, "model_name", "test-model")
-            self._agent = Agent(self._model_instance, output_type=ComplexityResult, retries=retries)
-            return
-
-        if self._provider_name in ("gemini", "google"):
-            self._provider_name = "gemini"
+            self._model_name = model.model_name
+        elif self._provider_name == "gemini":
             resolved_key = api_key or get_gemini_api_key()
             if not resolved_key:
                 raise LLMError(
                     "Missing API key for Gemini provider. Set GEMINI_API_KEY or GOOGLE_API_KEY."
                 )
-            model_str = model or "gemini-2.5-flash"
-            clean_name = model_str
-            for prefix in ("gemini:", "google-gla:", "google-vertex:", "google:"):
-                if clean_name.startswith(prefix):
-                    clean_name = clean_name[len(prefix) :]
-                    break
-            self._model_name = clean_name
+            model_str = model or DEFAULT_GEMINI_MODEL
+            self._model_name = _strip_prefix(model_str, _GEMINI_PREFIXES)
             http_client = httpx.AsyncClient(timeout=timeout)
             google_prov = GoogleProvider(
                 api_key=resolved_key,
                 http_client=http_client,
                 base_url=base_url,
             )
-            self._model_instance = GoogleModel(clean_name, provider=google_prov)
-
-        elif self._provider_name in ("openai", "openai-chat"):
-            self._provider_name = "openai"
+            self._model_instance = GoogleModel(self._model_name, provider=google_prov)
+        else:  # openai or openai-chat
             resolved_key = api_key or get_openai_api_key()
             resolved_base_url = base_url or get_openai_base_url()
             if not resolved_key and not resolved_base_url:
                 raise LLMError("Missing API key for OpenAI provider. Set OPENAI_API_KEY.")
             model_str = model or DEFAULT_MODEL
-            clean_name = model_str
-            for prefix in ("openai:", "openai-chat:"):
-                if clean_name.startswith(prefix):
-                    clean_name = clean_name[len(prefix) :]
-                    break
-            self._model_name = clean_name
-            client = AsyncOpenAI(
-                api_key=resolved_key or "api-key-not-set",
+            self._model_name = _strip_prefix(model_str, _OPENAI_PREFIXES)
+            http_client = httpx.AsyncClient(timeout=timeout)
+            openai_prov = PydanticOpenAIProvider(
+                api_key=resolved_key,
                 base_url=resolved_base_url,
-                timeout=timeout,
+                http_client=http_client,
             )
-            openai_prov = PydanticOpenAIProvider(openai_client=client)
-            self._model_instance = OpenAIChatModel(clean_name, provider=openai_prov)
-
-        else:
-            raise LLMError(f"Unsupported provider: '{provider}'")
+            self._model_instance = OpenAIChatModel(self._model_name, provider=openai_prov)
 
         self._agent = Agent(self._model_instance, output_type=ComplexityResult, retries=retries)
 
@@ -129,8 +125,6 @@ class PydanticAIProvider(LLMProvider):
         diff_excerpt: str,
         stats_json: str,
         title: str,
-        max_retries: Optional[int] = None,
-        retry_delay: Optional[float] = None,
     ) -> Dict[str, Any]:
         """
         Analyze PR complexity using PydanticAI and return score with explanation.
@@ -140,8 +134,6 @@ class PydanticAIProvider(LLMProvider):
             diff_excerpt: Formatted diff excerpt
             stats_json: JSON string with stats
             title: PR title
-            max_retries: Optional retry attempts override (maintained for compatibility)
-            retry_delay: Optional retry delay (maintained for compatibility)
 
         Returns:
             Dict with 'complexity' (int 1..10), 'explanation' (str),
@@ -156,13 +148,8 @@ class PydanticAIProvider(LLMProvider):
 
         try:
             result = self._agent.run_sync(user_prompt, instructions=prompt)
-
             output = result.output
-            tokens = None
-            if hasattr(result, "usage") and result.usage is not None:
-                usage = result.usage() if callable(result.usage) else result.usage
-                if usage is not None:
-                    tokens = getattr(usage, "total_tokens", None)
+            tokens = result.usage().total_tokens
 
             return {
                 "complexity": output.complexity,
@@ -176,8 +163,6 @@ class PydanticAIProvider(LLMProvider):
             raise LLMError(
                 f"Failed to parse or validate LLM response from {self.provider_name}: {e}"
             ) from e
-        except LLMError:
-            raise
         except Exception as e:
             raise LLMError(f"{self.provider_name} API error: {e}") from e
 
@@ -210,7 +195,7 @@ class GeminiProvider(PydanticAIProvider):
     def __init__(
         self,
         api_key: Optional[str] = None,
-        model: str = "gemini-2.5-flash",
+        model: str = DEFAULT_GEMINI_MODEL,
         timeout: float = DEFAULT_TIMEOUT,
         base_url: Optional[str] = None,
         retries: int = DEFAULT_MAX_RETRIES,
@@ -226,8 +211,16 @@ class GeminiProvider(PydanticAIProvider):
         )
 
 
+_PROVIDERS: Dict[str, tuple[type[PydanticAIProvider], str]] = {
+    "openai": (OpenAIProvider, DEFAULT_MODEL),
+    "openai-chat": (OpenAIProvider, DEFAULT_MODEL),
+    "gemini": (GeminiProvider, DEFAULT_GEMINI_MODEL),
+    "google": (GeminiProvider, DEFAULT_GEMINI_MODEL),
+}
+
+
 def get_provider(
-    provider: str,
+    provider: str = "auto",
     api_key: Optional[str] = None,
     model: Optional[str] = None,
     base_url: Optional[str] = None,
@@ -248,35 +241,29 @@ def get_provider(
     Returns:
         LLMProvider instance
     """
-    normalized_provider = provider.lower().strip() if isinstance(provider, str) else "auto"
+    normalized_provider = provider.lower().strip()
 
-    if normalized_provider in ("openai", "openai-chat"):
-        return OpenAIProvider(
+    if normalized_provider in _PROVIDERS:
+        provider_cls, default_model = _PROVIDERS[normalized_provider]
+        return provider_cls(
             api_key=api_key,
-            model=model or DEFAULT_MODEL,
+            model=model or default_model,
             timeout=timeout,
             base_url=base_url,
             retries=retries,
         )
-    elif normalized_provider in ("gemini", "google"):
-        return GeminiProvider(
-            api_key=api_key,
-            model=model or "gemini-2.5-flash",
-            timeout=timeout,
-            base_url=base_url,
-            retries=retries,
-        )
-    elif normalized_provider == "auto":
+
+    if normalized_provider == "auto":
         if api_key:
             if api_key.startswith("AIza"):
                 return GeminiProvider(
                     api_key=api_key,
-                    model=model or "gemini-2.5-flash",
+                    model=model or DEFAULT_GEMINI_MODEL,
                     timeout=timeout,
                     base_url=base_url,
                     retries=retries,
                 )
-            elif api_key.startswith("sk-"):
+            if api_key.startswith("sk-"):
                 return OpenAIProvider(
                     api_key=api_key,
                     model=model or DEFAULT_MODEL,
@@ -284,21 +271,21 @@ def get_provider(
                     base_url=base_url,
                     retries=retries,
                 )
-            else:
-                raise LLMError(
-                    "Explicit api_key passed with provider='auto'. Please specify provider='gemini' or provider='openai'."
-                )
+            raise LLMError(
+                "Explicit api_key passed with provider='auto'. "
+                "Please specify provider='gemini' or provider='openai'."
+            )
         gemini_key = get_gemini_api_key()
         openai_key = get_openai_api_key()
         if gemini_key and not openai_key:
             return GeminiProvider(
                 api_key=gemini_key,
-                model=model or "gemini-2.5-flash",
+                model=model or DEFAULT_GEMINI_MODEL,
                 timeout=timeout,
                 base_url=base_url,
                 retries=retries,
             )
-        elif openai_key:
+        if openai_key:
             return OpenAIProvider(
                 api_key=openai_key,
                 model=model or DEFAULT_MODEL,
@@ -306,9 +293,9 @@ def get_provider(
                 base_url=base_url,
                 retries=retries,
             )
-        else:
-            raise LLMError(
-                "No API key found in environment. Set GEMINI_API_KEY / GOOGLE_API_KEY or OPENAI_API_KEY."
-            )
-    else:
-        raise LLMError(f"Unsupported provider: '{provider}'")
+        raise LLMError(
+            "No API key found in environment. "
+            "Set GEMINI_API_KEY / GOOGLE_API_KEY or OPENAI_API_KEY."
+        )
+
+    raise LLMError(f"Unsupported provider: '{provider}'")

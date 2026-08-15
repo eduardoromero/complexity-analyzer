@@ -3,8 +3,11 @@
 from unittest.mock import patch
 import pytest
 from pydantic import ValidationError
+from pydantic_ai.messages import ModelResponse, ToolCallPart
+from pydantic_ai.models.function import FunctionModel
 from pydantic_ai.models.test import TestModel
 
+from cli.constants import DEFAULT_GEMINI_MODEL, DEFAULT_MODEL
 from cli.llm import (
     GeminiProvider,
     LLMError,
@@ -83,12 +86,12 @@ class TestOpenAIProviderBase:
     def test_default_model(self):
         """Test default model is set correctly."""
         provider = OpenAIProvider("test-key")
-        assert provider.model_name == "gpt-5.2"
+        assert provider.model_name == DEFAULT_MODEL
 
     def test_timeout_passed_to_client(self):
         """Test timeout is correctly passed to the underlying AsyncOpenAI client."""
         provider = OpenAIProvider("test-key", timeout=15.0)
-        assert provider._model_instance._provider.client.timeout == 15.0
+        assert provider._model_instance._provider.client.timeout.read == 15.0
 
     def test_base_url_passed_to_client(self):
         """Test base_url is passed through to the AsyncOpenAI client."""
@@ -141,7 +144,7 @@ class TestGeminiProviderBase:
     def test_default_model(self):
         """Test default model is set correctly."""
         provider = GeminiProvider("test-key")
-        assert provider.model_name == "gemini-2.5-flash"
+        assert provider.model_name == DEFAULT_GEMINI_MODEL
 
     def test_timeout_passed_to_client(self):
         """Test timeout is correctly passed to the Google client httpx client."""
@@ -244,9 +247,35 @@ class TestGetProvider:
         with pytest.raises(LLMError, match="Unsupported provider: 'cohere'"):
             PydanticAIProvider(provider="cohere", api_key="test-key")
 
+    def test_pydantic_ai_provider_model_instance_validates_provider(self):
+        """Test Model-instance path also validates provider name."""
+        with pytest.raises(LLMError, match="Unsupported provider: 'cohere'"):
+            PydanticAIProvider(provider="cohere", model=TestModel())
+
 
 class TestAnalyzeComplexity:
-    """Tests for analyze_complexity execution using TestModel."""
+    """Tests for analyze_complexity execution using TestModel and FunctionModel."""
+
+    def test_system_prompt_reaches_the_model(self):
+        """Test that system prompt instructions actually reach the model request."""
+        seen = {}
+
+        def capture(messages, info):
+            seen["req"] = messages[0]
+            return ModelResponse(
+                parts=[ToolCallPart("final_result", {"complexity": 4, "explanation": "x"})]
+            )
+
+        provider = PydanticAIProvider(provider="openai", model=FunctionModel(capture))
+        result = provider.analyze_complexity(
+            prompt="SYSTEM-RUBRIC-MARKER",
+            diff_excerpt="diff content",
+            stats_json="{}",
+            title="Title",
+        )
+
+        assert result["complexity"] == 4
+        assert seen["req"].instructions == "SYSTEM-RUBRIC-MARKER"
 
     def test_analyze_complexity_success_openai(self):
         """Test successful complexity analysis with OpenAI provider using TestModel."""
@@ -305,6 +334,32 @@ class TestAnalyzeComplexity:
                 stats_json="{}",
                 title="Title",
             )
+
+    def test_bounded_request_count_on_schema_error(self):
+        """Test that schema validation retries are bounded to retries + 1 (e.g. 4 total)."""
+        request_count = 0
+        original_request = TestModel.request
+
+        async def counting_request(self, *args, **kwargs):
+            nonlocal request_count
+            request_count += 1
+            return await original_request(self, *args, **kwargs)
+
+        test_model = TestModel(
+            custom_output_args={"complexity": 15, "explanation": "Out of bounds"}
+        )
+        provider = PydanticAIProvider(provider="openai", model=test_model, retries=3)
+
+        with patch.object(TestModel, "request", counting_request):
+            with pytest.raises(LLMError, match="Failed to parse or validate LLM response"):
+                provider.analyze_complexity(
+                    prompt="Analyze",
+                    diff_excerpt="diff",
+                    stats_json="{}",
+                    title="Title",
+                )
+
+        assert request_count == 4  # 1 initial + 3 retries
 
     def test_analyze_complexity_api_error_handling(self):
         """Test API errors from provider are caught and wrapped as LLMError."""
