@@ -30,9 +30,13 @@ class AnalysisConfig:
     # API settings
     sleep_seconds: float = DEFAULT_SLEEP_SECONDS
 
+    # LLM provider selection
+    provider: str = "auto"
+
     # Credentials (optional - can be provided at runtime)
     github_token: Optional[str] = None
     openai_key: Optional[str] = None
+    gemini_key: Optional[str] = None
 
     # Token rotation (optional)
     token_rotator: Optional["TokenRotator"] = None
@@ -52,6 +56,10 @@ class AnalysisConfig:
             raise ValueError(f"sleep_seconds cannot be negative, got {self.sleep_seconds}")
         if not self.model or not self.model.strip():
             raise ValueError("model cannot be empty")
+        if self.provider not in ("auto", "gemini", "openai"):
+            raise ValueError(
+                f"provider must be 'auto', 'gemini', or 'openai', got '{self.provider}'"
+            )
 
 
 @dataclass
