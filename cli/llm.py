@@ -1,4 +1,4 @@
-"""LLM provider layer with PydanticAI integration and schema validation."""
+"""PydanticAI powered LLM providers and schema validation."""
 
 import time
 from typing import Any, Dict, Optional, Union
@@ -251,23 +251,23 @@ def get_provider(
     Returns:
         LLMProvider instance
     """
-    provider_norm = provider.lower().strip() if isinstance(provider, str) else "auto"
+    normalized_provider = provider.lower().strip() if isinstance(provider, str) else "auto"
 
-    if provider_norm in ("openai", "openai-chat"):
+    if normalized_provider in ("openai", "openai-chat"):
         return OpenAIProvider(
             api_key=api_key,
             model=model or DEFAULT_MODEL,
             timeout=timeout,
             base_url=base_url,
         )
-    elif provider_norm in ("gemini", "google"):
+    elif normalized_provider in ("gemini", "google"):
         return GeminiProvider(
             api_key=api_key,
             model=model or "gemini-2.5-flash",
             timeout=timeout,
             base_url=base_url,
         )
-    elif provider_norm == "auto":
+    elif normalized_provider == "auto":
         if api_key:
             if api_key.startswith("AIza"):
                 return GeminiProvider(
