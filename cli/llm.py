@@ -154,7 +154,10 @@ class PydanticAIProvider(LLMProvider):
         try:
             result = self._agent.run_sync(user_prompt, instructions=prompt)
             output = result.output
-            tokens = result.usage().total_tokens
+            usage = result.usage()
+            tokens = usage.total_tokens
+            if not tokens and usage.details:
+                tokens = sum(v for v in usage.details.values() if isinstance(v, (int, float)))
 
             return {
                 "complexity": output.complexity,

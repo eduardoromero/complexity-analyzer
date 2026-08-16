@@ -1,6 +1,6 @@
 """Tests for LLM module and PydanticAI provider integration."""
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 import pytest
 from pydantic import ValidationError
 from pydantic_ai.messages import ModelResponse, ToolCallPart
@@ -385,6 +385,31 @@ class TestAnalyzeComplexity:
         assert provider.provider == "gemini"
         assert provider.model_name == test_model.model_name
         assert provider.model == test_model.model_name
+
+    def test_analyze_complexity_token_fallback_details(self):
+        """Test fallback to usage.details when total_tokens is zero or falsy."""
+        test_model = TestModel()
+        provider = PydanticAIProvider(provider="gemini", model=test_model)
+
+        mock_result = MagicMock()
+        mock_result.output = ComplexityResult(complexity=5, explanation="Solid PR")
+        mock_usage = MagicMock()
+        mock_usage.total_tokens = 0
+        mock_usage.details = {
+            "text_prompt_tokens": 150,
+            "thoughts_tokens": 50,
+            "candidates_tokens": 20,
+        }
+        mock_result.usage.return_value = mock_usage
+
+        with patch.object(provider._agent, "run_sync", return_value=mock_result):
+            res = provider.analyze_complexity(
+                prompt="Analyze",
+                diff_excerpt="diff",
+                stats_json="{}",
+                title="Title",
+            )
+            assert res["tokens"] == 220
 
 
 class TestLLMError:
