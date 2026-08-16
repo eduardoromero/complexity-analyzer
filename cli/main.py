@@ -9,6 +9,7 @@ from typing import Callable, List, Optional
 
 import typer
 from dotenv import load_dotenv
+from typer.core import TyperGroup
 
 # Load environment variables from .env file
 load_dotenv()
@@ -52,13 +53,28 @@ from .preprocess import make_prompt_input, process_diff  # noqa: E402
 from .scoring import InvalidResponseError  # noqa: E402
 from .utils import parse_pr_url  # noqa: E402
 
-app = typer.Typer(help="Analyze GitHub PR complexity using LLMs")
+# Keep regex for direct URL validation in main callback
+_OWNER_REPO_RE = re.compile(r"https?://github\.com/([^/\s]+)/([^/\s]+)/pull/(\d+)")
+
+
+class _DirectUrlGroup(TyperGroup):
+    """Click group that routes `complexity-cli <PR_URL>` to the analyze-pr command.
+
+    Click resolves the first positional argument as a command name, so a bare
+    PR URL would otherwise fail with "No such command". Rewriting the argument
+    list here keeps the original direct-invocation interface working.
+    """
+
+    def resolve_command(self, ctx, args):
+        if args and _OWNER_REPO_RE.match(args[0]):
+            args = ["analyze-pr", *args]
+        return super().resolve_command(ctx, args)
+
+
+app = typer.Typer(help="Analyze GitHub PR complexity using LLMs", cls=_DirectUrlGroup)
 
 # Initialize logger
 logger = get_logger()
-
-# Keep regex for direct URL validation in main callback
-_OWNER_REPO_RE = re.compile(r"https?://github\.com/([^/\s]+)/([^/\s]+)/pull/(\d+)")
 
 
 def resolve_provider_credentials(

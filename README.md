@@ -84,19 +84,50 @@ complexity-cli analyze-pr "https://github.com/owner/repo/pull/123"
 ### Options
 
 - `--prompt-file`, `-p`: Path to custom prompt file (default: embedded prompt)
-- `--model`, `-m`: OpenAI model name (default: `gpt-5.2`)
+- `--model`, `-m`: Model name (default: `gpt-5.2`)
 - `--format`, `-f`: Output format: `json` or `markdown` (default: `json`)
-- `--out`, `-o`: Write output to file
+- `--output-file`, `-o`: Write output to file
 - `--timeout`, `-t`: Request timeout in seconds (default: 120)
 - `--max-tokens`: Maximum tokens for diff excerpt (default: 50000)
 - `--hunks-per-file`: Maximum hunks per file (default: 2)
 - `--sleep-seconds`: Sleep between GitHub API calls (default: 0.7)
 - `--dry-run`: Fetch PR but don't call LLM
+- `--provider`: LLM provider: `openai`, `gemini`, or `auto` (default: `auto`)
+- `--openai-api-key`: OpenAI API key (overrides `OPENAI_API_KEY`)
+- `--gemini-api-key`: Gemini / Google AI Studio API key (overrides `GEMINI_API_KEY`)
+- `--api-base-url`: Base URL for an OpenAI-compatible API endpoint
 
 ### Environment Variables
 
-- `OPENAI_API_KEY` (required): OpenAI API key
+- `OPENAI_API_KEY` (required unless using Gemini): OpenAI API key
+- `GEMINI_API_KEY` or `GOOGLE_API_KEY` (optional): Gemini / Google AI Studio API key
 - `GH_TOKEN` or `GITHUB_TOKEN` (optional): GitHub API token for private repos or higher rate limits
+
+### Multi-Provider Support (Additive)
+
+Google Gemini is supported as an additional provider alongside OpenAI. This is
+strictly additive: the original OpenAI workflow is unchanged. With only
+`OPENAI_API_KEY` set (or `--openai-api-key` passed), the tool behaves exactly as
+before, defaulting to the OpenAI provider and the `gpt-5.2` model.
+
+Provider auto-detection (`--provider auto`, the default):
+
+- Only `OPENAI_API_KEY` set → OpenAI with `gpt-5.2`
+- Only `GEMINI_API_KEY`/`GOOGLE_API_KEY` set → Gemini with `gemini-flash-latest`
+- Both set → OpenAI (original behavior wins)
+
+```bash
+# Original OpenAI usage — unchanged
+export OPENAI_API_KEY="your-key"
+complexity-cli analyze-pr "https://github.com/owner/repo/pull/123"
+
+# Gemini via auto-detection
+export GEMINI_API_KEY="your-key"
+complexity-cli analyze-pr "https://github.com/owner/repo/pull/123"
+
+# Explicit provider selection
+complexity-cli analyze-pr "https://github.com/owner/repo/pull/123" --provider gemini
+```
 
 ### Examples
 
@@ -111,7 +142,7 @@ complexity-cli analyze-pr "https://github.com/owner/repo/pull/123" --model gpt-4
 complexity-cli analyze-pr "https://github.com/owner/repo/pull/123" --format markdown
 
 # Save output to file
-complexity-cli analyze-pr "https://github.com/owner/repo/pull/123" --out result.json
+complexity-cli analyze-pr "https://github.com/owner/repo/pull/123" --output-file result.json
 
 # Dry run (fetch PR but skip LLM)
 complexity-cli analyze-pr "https://github.com/owner/repo/pull/123" --dry-run
@@ -235,7 +266,7 @@ complexity-cli batch-analyze --input-file prs.txt --output results.csv
 - `--output`, `-o`: Output CSV file path (required)
 - `--cache`: Cache file for PR list (used with date range to avoid re-fetching)
 - `--prompt-file`, `-p`: Path to custom prompt file
-- `--model`, `-m`: OpenAI model name (default: `gpt-5.2`)
+- `--model`, `-m`: Model name (default: `gpt-5.2`)
 - `--timeout`, `-t`: Request timeout in seconds (default: 120)
 - `--max-tokens`: Maximum tokens for diff excerpt (default: 50000)
 - `--hunks-per-file`: Maximum hunks per file (default: 2)
@@ -257,7 +288,7 @@ complexity-cli batch-analyze --input-file prs.txt --output results.csv
   "score": 5,
   "explanation": "Multiple modules/services with non-trivial control flow changes",
   "provider": "openai",
-  "model": "gpt-5.1",
+  "model": "gpt-5.2",
   "tokens": 1234,
   "timestamp": "2024-01-01T12:00:00Z"
 }
@@ -275,7 +306,7 @@ complexity-cli batch-analyze --input-file prs.txt --output results.csv
 **Details:**
 - Repository: owner/repo
 - PR: #123
-- Model: gpt-5.1
+- Model: gpt-5.2
 - Tokens used: 1234
 ```
 
