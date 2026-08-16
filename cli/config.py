@@ -68,6 +68,16 @@ def get_openai_base_url() -> Optional[str]:
     return os.getenv("OPENAI_BASE_URL") or None
 
 
+def get_anthropic_api_key() -> Optional[str]:
+    """Get Anthropic API key from environment."""
+    return os.getenv("ANTHROPIC_API_KEY")
+
+
+def get_anthropic_base_url() -> Optional[str]:
+    """Get Anthropic base URL from environment."""
+    return os.getenv("ANTHROPIC_BASE_URL") or None
+
+
 def validate_owner_repo(owner: str, repo: str) -> None:
     """Validate owner and repo names."""
     pattern = re.compile(r"^[A-Za-z0-9_.-]+$")

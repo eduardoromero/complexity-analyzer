@@ -4,7 +4,8 @@ import pytest
 
 from cli.analyze import analyze_single_pr, is_automated_sync_pr
 from cli.config_types import AnalysisConfig
-from cli.constants import DEFAULT_GEMINI_MODEL, DEFAULT_MODEL
+from cli.constants import DEFAULT_ANTHROPIC_MODEL, DEFAULT_GEMINI_MODEL, DEFAULT_MODEL
+
 
 PR_URL = "https://github.com/owner/repo/pull/123"
 
@@ -88,8 +89,9 @@ def test_analyze_single_pr_missing_api_keys_raises_value_error():
     with patch.dict("os.environ", {}, clear=True):
         with patch("cli.analyze.get_gemini_api_key", return_value=None):
             with patch("cli.analyze.get_openai_api_key", return_value=None):
-                with pytest.raises(ValueError, match="GEMINI_API_KEY or OPENAI_API_KEY"):
-                    analyze_single_pr(PR_URL, config)
+                with patch("cli.analyze.get_anthropic_api_key", return_value=None):
+                    with pytest.raises(ValueError, match="ANTHROPIC_API_KEY"):
+                        analyze_single_pr(PR_URL, config)
 
 
 @pytest.fixture
@@ -178,6 +180,26 @@ class TestProviderAutoDetection:
         assert kwargs["provider"] == "openai"
         assert kwargs["api_key"] == "sk-explicit"
 
+    def test_auto_detects_anthropic_from_env(self, analyze_mocks, monkeypatch):
+        """ANTHROPIC_API_KEY alone selects the Anthropic provider and its default model."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-env-key")
+
+        analyze_single_pr(PR_URL, AnalysisConfig(provider="auto"))
+
+        kwargs = analyze_mocks.call_args.kwargs
+        assert kwargs["provider"] == "anthropic"
+        assert kwargs["api_key"] == "sk-ant-env-key"
+        assert kwargs["model"] == DEFAULT_ANTHROPIC_MODEL
+
+    def test_auto_detects_anthropic_from_config_key(self, analyze_mocks):
+        """An explicit anthropic_key on the config selects Anthropic with no env keys set."""
+        analyze_single_pr(PR_URL, AnalysisConfig(provider="auto", anthropic_key="sk-ant-explicit"))
+
+        kwargs = analyze_mocks.call_args.kwargs
+        assert kwargs["provider"] == "anthropic"
+        assert kwargs["api_key"] == "sk-ant-explicit"
+        assert kwargs["model"] == DEFAULT_ANTHROPIC_MODEL
+
 
 class TestExplicitProviderSelection:
     """Explicit provider selection through AnalysisConfig."""
@@ -205,6 +227,41 @@ class TestExplicitProviderSelection:
 
         with pytest.raises(ValueError, match="OPENAI_API_KEY"):
             analyze_single_pr(PR_URL, AnalysisConfig(provider="openai"))
+
+    def test_explicit_anthropic_uses_env_key(self, analyze_mocks, monkeypatch):
+        """provider='anthropic' reads ANTHROPIC_API_KEY from the environment."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-env-key")
+
+        analyze_single_pr(PR_URL, AnalysisConfig(provider="anthropic"))
+
+        kwargs = analyze_mocks.call_args.kwargs
+        assert kwargs["provider"] == "anthropic"
+        assert kwargs["api_key"] == "sk-ant-env-key"
+
+    def test_explicit_anthropic_without_key_raises(self, analyze_mocks, monkeypatch):
+        """provider='anthropic' without an Anthropic key fails with a clear error."""
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-env-key")
+
+        with pytest.raises(ValueError, match="ANTHROPIC_API_KEY"):
+            analyze_single_pr(PR_URL, AnalysisConfig(provider="anthropic"))
+
+    def test_anthropic_swaps_openai_default_model(self, analyze_mocks, monkeypatch):
+        """The OpenAI default model is swapped for the Anthropic default under Anthropic."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-env-key")
+
+        analyze_single_pr(PR_URL, AnalysisConfig(provider="anthropic", model=DEFAULT_MODEL))
+
+        assert analyze_mocks.call_args.kwargs["model"] == DEFAULT_ANTHROPIC_MODEL
+
+    def test_anthropic_keeps_explicit_model_override(self, analyze_mocks, monkeypatch):
+        """A caller-supplied Anthropic model is passed through untouched."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-env-key")
+
+        analyze_single_pr(
+            PR_URL, AnalysisConfig(provider="anthropic", model="claude-3-7-sonnet-latest")
+        )
+
+        assert analyze_mocks.call_args.kwargs["model"] == "claude-3-7-sonnet-latest"
 
     def test_gemini_keeps_explicit_model_override(self, analyze_mocks, monkeypatch):
         """A caller-supplied Gemini model is not replaced by the default."""

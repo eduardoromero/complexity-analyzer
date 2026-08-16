@@ -4,19 +4,23 @@ from unittest.mock import MagicMock, patch
 import pytest
 from pydantic import ValidationError
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
+from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.models.function import FunctionModel
 from pydantic_ai.models.google import GoogleModel
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.models.test import TestModel
 
-from cli.constants import DEFAULT_GEMINI_MODEL, DEFAULT_MODEL
+from cli.config import get_anthropic_api_key, get_anthropic_base_url
+from cli.constants import DEFAULT_ANTHROPIC_MODEL, DEFAULT_GEMINI_MODEL, DEFAULT_MODEL
 from cli.llm import (
+    AnthropicProvider,
     GeminiProvider,
     LLMError,
     OpenAIProvider,
     PydanticAIProvider,
     get_provider,
 )
+
 from cli.llm_base import LLMProvider
 from cli.scoring import ComplexityResult
 
@@ -230,6 +234,76 @@ class TestGeminiProviderBase:
             assert "openai-proxy" not in (http_options.base_url or "")
 
 
+class TestAnthropicProviderBase:
+    """Tests for AnthropicProvider base functionality."""
+
+    def test_inherits_from_llm_provider(self):
+        """Test that AnthropicProvider inherits from LLMProvider and PydanticAIProvider."""
+        assert issubclass(AnthropicProvider, LLMProvider)
+        assert issubclass(AnthropicProvider, PydanticAIProvider)
+
+    def test_provider_name(self):
+        """Test provider_name property."""
+        provider = AnthropicProvider("test-key")
+        assert provider.provider_name == "anthropic"
+
+    def test_model_name(self):
+        """Test model_name property."""
+        provider = AnthropicProvider("test-key", model="claude-3-7-sonnet-latest")
+        assert provider.model_name == "claude-3-7-sonnet-latest"
+
+    def test_model_name_strips_prefix(self):
+        """Test model_name strips 'anthropic:' and 'claude:' prefixes."""
+        p1 = AnthropicProvider("test-key", model="anthropic:claude-3-7-sonnet-latest")
+        assert p1.model_name == "claude-3-7-sonnet-latest"
+
+        p2 = AnthropicProvider("test-key", model="claude:claude-3-5-haiku-latest")
+        assert p2.model_name == "claude-3-5-haiku-latest"
+
+    def test_model_backward_compat(self):
+        """Test model property for backward compatibility."""
+        provider = AnthropicProvider("test-key", model="claude-sonnet-latest")
+        assert provider.model == "claude-sonnet-latest"
+
+    def test_default_model(self):
+        """Test default model is set correctly."""
+        provider = AnthropicProvider("test-key")
+        assert provider.model_name == DEFAULT_ANTHROPIC_MODEL
+
+    def test_missing_api_key_raises_llm_error(self):
+        """Test missing API key raises LLMError when env vars are clear."""
+        with patch.dict("os.environ", {}, clear=True):
+            with patch("cli.llm.get_anthropic_api_key", return_value=None):
+                with patch("cli.llm.get_anthropic_base_url", return_value=None):
+                    with pytest.raises(LLMError, match="Missing API key"):
+                        AnthropicProvider()
+
+    def test_builds_anthropic_model(self):
+        """Test Anthropic initialization builds a PydanticAI AnthropicModel."""
+        provider = AnthropicProvider("test-key", model="claude-sonnet-latest")
+        assert isinstance(provider._model_instance, AnthropicModel)
+        assert provider._model_instance.model_name == "claude-sonnet-latest"
+
+    def test_api_key_read_from_environment(self):
+        """Test the Anthropic key is resolved from the environment when not passed."""
+        with patch("cli.llm.get_anthropic_api_key", return_value="sk-ant-env-key") as mock_key:
+            provider = AnthropicProvider()
+            mock_key.assert_called_once()
+            assert provider.provider_name == "anthropic"
+
+    def test_get_anthropic_api_key_and_base_url_helpers(self):
+        """Test get_anthropic_api_key and get_anthropic_base_url helper functions."""
+        with patch.dict(
+            "os.environ",
+            {
+                "ANTHROPIC_API_KEY": "sk-ant-test",
+                "ANTHROPIC_BASE_URL": "https://api.anthropic.test",
+            },
+        ):
+            assert get_anthropic_api_key() == "sk-ant-test"
+            assert get_anthropic_base_url() == "https://api.anthropic.test"
+
+
 class TestProviderAliases:
     """Tests for provider-name normalization on PydanticAIProvider."""
 
@@ -238,6 +312,12 @@ class TestProviderAliases:
         provider = PydanticAIProvider(provider="google", api_key="test-key")
         assert provider.provider_name == "gemini"
         assert isinstance(provider._model_instance, GoogleModel)
+
+    def test_claude_alias_normalizes_to_anthropic(self):
+        """Test 'claude' is normalized to 'anthropic'."""
+        provider = PydanticAIProvider(provider="claude", api_key="test-key")
+        assert provider.provider_name == "anthropic"
+        assert isinstance(provider._model_instance, AnthropicModel)
 
     def test_openai_chat_alias_builds_openai_model(self):
         """Test 'openai-chat' is accepted and builds an OpenAI chat model."""
@@ -249,6 +329,9 @@ class TestProviderAliases:
         """Test provider names are lowercased and stripped."""
         assert PydanticAIProvider(provider="  GEMINI ", api_key="k").provider_name == "gemini"
         assert PydanticAIProvider(provider="OpenAI", api_key="k").provider_name == "openai"
+        assert (
+            PydanticAIProvider(provider="  ANTHROPIC  ", api_key="k").provider_name == "anthropic"
+        )
 
     def test_default_model_per_provider(self):
         """Test each provider falls back to its own default model."""
@@ -256,6 +339,9 @@ class TestProviderAliases:
             DEFAULT_GEMINI_MODEL
         )
         assert PydanticAIProvider(provider="openai", api_key="k").model_name == DEFAULT_MODEL
+        assert PydanticAIProvider(provider="anthropic", api_key="k").model_name == (
+            DEFAULT_ANTHROPIC_MODEL
+        )
 
 
 class TestStructuredOutput:
@@ -315,23 +401,51 @@ class TestGetProvider:
         assert isinstance(provider, GeminiProvider)
         assert provider.provider_name == "gemini"
 
+    def test_get_provider_anthropic(self):
+        """Test get_provider with anthropic."""
+        provider = get_provider(
+            "anthropic", api_key="test-key", model="anthropic:claude-3-7-sonnet-latest"
+        )
+        assert isinstance(provider, AnthropicProvider)
+        assert provider.provider_name == "anthropic"
+        assert provider.model_name == "claude-3-7-sonnet-latest"
+
+    def test_get_provider_claude_alias(self):
+        """Test get_provider with claude alias."""
+        provider = get_provider("claude", api_key="test-key")
+        assert isinstance(provider, AnthropicProvider)
+        assert provider.provider_name == "anthropic"
+        assert provider.model_name == DEFAULT_ANTHROPIC_MODEL
+
     def test_get_provider_auto_with_gemini_env(self):
         """Test get_provider auto-detection with Gemini key in environment."""
         with patch.dict("os.environ", {}, clear=True):
             with patch("cli.llm.get_gemini_api_key", return_value="gemini-key"):
                 with patch("cli.llm.get_openai_api_key", return_value=None):
-                    provider = get_provider("auto")
-                    assert isinstance(provider, GeminiProvider)
-                    assert provider.provider_name == "gemini"
+                    with patch("cli.llm.get_anthropic_api_key", return_value=None):
+                        provider = get_provider("auto")
+                        assert isinstance(provider, GeminiProvider)
+                        assert provider.provider_name == "gemini"
 
     def test_get_provider_auto_with_openai_env(self):
         """Test get_provider auto-detection with OpenAI key in environment."""
         with patch.dict("os.environ", {}, clear=True):
             with patch("cli.llm.get_gemini_api_key", return_value=None):
                 with patch("cli.llm.get_openai_api_key", return_value="openai-key"):
-                    provider = get_provider("auto")
-                    assert isinstance(provider, OpenAIProvider)
-                    assert provider.provider_name == "openai"
+                    with patch("cli.llm.get_anthropic_api_key", return_value=None):
+                        provider = get_provider("auto")
+                        assert isinstance(provider, OpenAIProvider)
+                        assert provider.provider_name == "openai"
+
+    def test_get_provider_auto_with_anthropic_env(self):
+        """Test get_provider auto-detection with Anthropic key in environment."""
+        with patch.dict("os.environ", {}, clear=True):
+            with patch("cli.llm.get_anthropic_api_key", return_value="sk-ant-key"):
+                with patch("cli.llm.get_gemini_api_key", return_value=None):
+                    with patch("cli.llm.get_openai_api_key", return_value=None):
+                        provider = get_provider("auto")
+                        assert isinstance(provider, AnthropicProvider)
+                        assert provider.provider_name == "anthropic"
 
     def test_get_provider_openai_chat_alias(self):
         """Test get_provider with the openai-chat alias."""
@@ -343,6 +457,7 @@ class TestGetProvider:
         """Test get_provider substitutes each provider's default model when none is given."""
         assert get_provider("gemini", api_key="test-key").model_name == DEFAULT_GEMINI_MODEL
         assert get_provider("openai", api_key="test-key").model_name == DEFAULT_MODEL
+        assert get_provider("anthropic", api_key="test-key").model_name == DEFAULT_ANTHROPIC_MODEL
 
     def test_get_provider_forwards_base_url_and_timeout(self):
         """Test get_provider plumbs base_url and timeout to the built client."""
@@ -362,6 +477,7 @@ class TestGetProvider:
             patch.dict("os.environ", {}, clear=True),
             patch("cli.llm.get_gemini_api_key", return_value="AIza-key"),
             patch("cli.llm.get_openai_api_key", return_value="sk-key"),
+            patch("cli.llm.get_anthropic_api_key", return_value="sk-ant-key"),
         ):
             provider = get_provider("auto")
             assert isinstance(provider, OpenAIProvider)
@@ -371,6 +487,7 @@ class TestGetProvider:
         """Test provider names are normalized before lookup."""
         assert get_provider("GEMINI", api_key="test-key").provider_name == "gemini"
         assert get_provider(" OpenAI ", api_key="test-key").provider_name == "openai"
+        assert get_provider(" Anthropic ", api_key="test-key").provider_name == "anthropic"
 
     def test_get_provider_auto_with_explicit_gemini_key(self):
         """Test get_provider auto with explicit Gemini key (starts with AIza)."""
@@ -386,6 +503,13 @@ class TestGetProvider:
             assert isinstance(provider, OpenAIProvider)
             assert provider.provider_name == "openai"
 
+    def test_get_provider_auto_with_explicit_anthropic_key(self):
+        """Test get_provider auto with explicit Anthropic key (starts with sk-ant-)."""
+        with patch.dict("os.environ", {}, clear=True):
+            provider = get_provider("auto", api_key="sk-ant-api03-testkey123")
+            assert isinstance(provider, AnthropicProvider)
+            assert provider.provider_name == "anthropic"
+
     def test_get_provider_auto_unrecognized_key_raises(self):
         """Test get_provider auto with unrecognized key format raises LLMError."""
         with patch.dict("os.environ", {}, clear=True):
@@ -397,13 +521,14 @@ class TestGetProvider:
         with patch.dict("os.environ", {}, clear=True):
             with patch("cli.llm.get_gemini_api_key", return_value=None):
                 with patch("cli.llm.get_openai_api_key", return_value=None):
-                    with pytest.raises(LLMError, match="No API key found in environment"):
-                        get_provider("auto")
+                    with patch("cli.llm.get_anthropic_api_key", return_value=None):
+                        with pytest.raises(LLMError, match="No API key found in environment"):
+                            get_provider("auto")
 
     def test_get_provider_unsupported_provider_raises(self):
         """Test get_provider with unknown provider string raises LLMError."""
-        with pytest.raises(LLMError, match="Unsupported provider: 'anthropic'"):
-            get_provider("anthropic", api_key="test-key")
+        with pytest.raises(LLMError, match="Unsupported provider: 'unknown_prov'"):
+            get_provider("unknown_prov", api_key="test-key")
 
     def test_pydantic_ai_provider_unsupported_raises(self):
         """Test PydanticAIProvider constructor with unsupported provider raises LLMError."""

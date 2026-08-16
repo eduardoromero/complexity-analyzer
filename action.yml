@@ -12,9 +12,17 @@ inputs:
     required: false
     default: ${{ github.event.pull_request.html_url }}
   provider:
-    description: 'LLM provider: gemini, openai, or auto'
+    description: 'LLM provider: gemini, openai, anthropic, or auto'
     required: false
     default: 'auto'
+  anthropic-api-key:
+    description: 'Anthropic API key for complexity analysis'
+    required: false
+    default: ''
+  anthropic_api_key:
+    description: 'Anthropic API key for complexity analysis'
+    required: false
+    default: ''
   gemini-api-key:
     description: 'Gemini / Google AI Studio API key'
     required: false
@@ -26,7 +34,7 @@ inputs:
     required: false
     default: ${{ github.token }}
   model:
-    description: 'Model name (e.g. gpt-5.2, gemini-flash-latest)'
+    description: 'Model name (e.g. gpt-5.2, gemini-flash-latest, claude-sonnet-latest)'
     required: false
     default: ''
   format:
@@ -62,7 +70,7 @@ outputs:
   explanation:
     description: 'Explanation of the complexity score'
   model:
-    description: 'Model used for analysis (e.g., gpt-5.2, gemini-flash-latest)'
+    description: 'Model used for analysis (e.g., gpt-5.2, gemini-flash-latest, claude-sonnet-latest)'
   output:
     description: 'Full analysis result in JSON format'
 
@@ -73,6 +81,8 @@ runs:
     - 'analyze-pr'
     - '--provider'
     - '${{ inputs.provider }}'
+    - '--anthropic-api-key'
+    - '${{ inputs.anthropic-api-key || inputs.anthropic_api_key }}'
     - '--gemini-api-key'
     - '${{ inputs.gemini-api-key }}'
     - '--openai-api-key'

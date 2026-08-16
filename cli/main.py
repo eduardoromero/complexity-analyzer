@@ -21,6 +21,7 @@ from .batch import (  # noqa: E402
     run_batch_analysis_with_labels,
 )
 from .config import (  # noqa: E402
+    get_anthropic_api_key,
     get_gemini_api_key,
     get_github_token,
     get_github_tokens,
@@ -30,6 +31,7 @@ from .config import (  # noqa: E402
     validate_pr_number,
 )
 from .constants import (  # noqa: E402
+    DEFAULT_ANTHROPIC_MODEL,
     DEFAULT_GEMINI_MODEL,
     DEFAULT_HUNKS_PER_FILE,
     DEFAULT_MAX_TOKENS,
@@ -81,6 +83,7 @@ def resolve_provider_credentials(
     provider: str = "auto",
     openai_api_key: Optional[str] = None,
     gemini_api_key: Optional[str] = None,
+    anthropic_api_key: Optional[str] = None,
 ) -> tuple[str, Optional[str]]:
     """
     Resolve provider credentials and perform fast pre-flight auth validation.
@@ -95,20 +98,32 @@ def resolve_provider_credentials(
     prov_norm = (provider or "auto").lower().strip()
     gemini_key = gemini_api_key or get_gemini_api_key()
     openai_key = openai_api_key or get_openai_api_key()
+    anthropic_key = anthropic_api_key or get_anthropic_api_key()
 
     if prov_norm == "auto":
-        if gemini_api_key and not openai_api_key:
+        if anthropic_api_key and not openai_api_key and not gemini_api_key:
+            effective_prov = "anthropic"
+            effective_key = anthropic_api_key
+        elif gemini_api_key and not openai_api_key and not anthropic_api_key:
             effective_prov = "gemini"
             effective_key = gemini_api_key
-        elif openai_api_key and not gemini_api_key:
+        elif openai_api_key and not gemini_api_key and not anthropic_api_key:
             effective_prov = "openai"
             effective_key = openai_api_key
-        elif gemini_key and not openai_key:
+        elif anthropic_key and not openai_key and not gemini_key:
+            effective_prov = "anthropic"
+            effective_key = anthropic_key
+        elif gemini_key and not openai_key and not anthropic_key:
             effective_prov = "gemini"
             effective_key = gemini_key
         else:
             effective_prov = "openai"
             effective_key = openai_key
+    elif prov_norm in ("anthropic", "claude"):
+        effective_prov = "anthropic"
+        effective_key = anthropic_key
+        if not effective_key:
+            raise ValueError("ANTHROPIC_API_KEY environment variable or argument is required")
     elif prov_norm in ("gemini", "google"):
         effective_prov = "gemini"
         effective_key = gemini_key
@@ -122,13 +137,21 @@ def resolve_provider_credentials(
         if not effective_key:
             raise ValueError("OPENAI_API_KEY environment variable or argument is required")
     else:
-        if prov_norm not in ("gemini", "google", "openai", "openai-chat", "auto"):
+        if prov_norm not in (
+            "gemini",
+            "google",
+            "openai",
+            "openai-chat",
+            "anthropic",
+            "claude",
+            "auto",
+        ):
             raise LLMError(f"Unsupported provider: '{provider}'")
         effective_prov = prov_norm
-        effective_key = openai_key or gemini_key
+        effective_key = openai_key or gemini_key or anthropic_key
 
-    if prov_norm == "auto" and not gemini_key and not openai_key:
-        raise ValueError("Either GEMINI_API_KEY or OPENAI_API_KEY is required")
+    if prov_norm == "auto" and not gemini_key and not openai_key and not anthropic_key:
+        raise ValueError("Either GEMINI_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY is required")
 
     return effective_prov, effective_key
 
@@ -148,6 +171,7 @@ def analyze_pr_to_dict(
     base_url: Optional[str] = None,
     provider: str = "auto",
     gemini_key: Optional[str] = None,
+    anthropic_key: Optional[str] = None,
 ) -> dict:
     """
     Analyze a GitHub PR and return result as dictionary.
@@ -185,6 +209,7 @@ def analyze_pr_to_dict(
         provider=provider,
         openai_api_key=openai_key,
         gemini_api_key=gemini_key,
+        anthropic_api_key=anthropic_key,
     )
 
     effective_model = (
@@ -193,7 +218,14 @@ def analyze_pr_to_dict(
             effective_prov in ("gemini", "google")
             and (not model or model == DEFAULT_MODEL or model == "")
         )
-        else (model or DEFAULT_MODEL)
+        else (
+            DEFAULT_ANTHROPIC_MODEL
+            if (
+                effective_prov in ("anthropic", "claude")
+                and (not model or model == DEFAULT_MODEL or model == "")
+            )
+            else (model or DEFAULT_MODEL)
+        )
     )
 
     provider_inst = get_provider(
@@ -301,6 +333,7 @@ def _analyze_pr_impl(
     base_url: Optional[str] = None,
     provider: str = "auto",
     gemini_api_key: Optional[str] = None,
+    anthropic_api_key: Optional[str] = None,
 ):
     """
     Analyze a GitHub PR and compute complexity score.
@@ -309,6 +342,7 @@ def _analyze_pr_impl(
     - GH_TOKEN or GITHUB_TOKEN: GitHub API token (optional for public repos)
     - OPENAI_API_KEY: OpenAI API key
     - GEMINI_API_KEY or GOOGLE_API_KEY: Gemini API key
+    - ANTHROPIC_API_KEY: Anthropic API key
     """
     # Set up logging if verbose
     if verbose:
@@ -325,6 +359,7 @@ def _analyze_pr_impl(
             provider=provider,
             openai_api_key=openai_api_key,
             gemini_api_key=gemini_api_key,
+            anthropic_api_key=anthropic_api_key,
         )
         final_github_token = github_token or get_github_token()
 
@@ -377,6 +412,7 @@ def _analyze_pr_impl(
                 github_token=final_github_token,
                 openai_key=openai_api_key,
                 gemini_key=gemini_api_key,
+                anthropic_key=anthropic_api_key,
                 provider=provider,
                 model=model,
                 timeout=timeout,
@@ -385,6 +421,7 @@ def _analyze_pr_impl(
                 sleep_seconds=sleep_seconds,
                 base_url=base_url,
             )
+
             typer.echo(f"PR: {output['title']}", err=True)
             typer.echo("Processing diff...", err=True)
             typer.echo("Analyzing complexity with LLM...", err=True)
@@ -510,7 +547,7 @@ def analyze_pr(
         None, "--prompt-file", "-p", help="Path to custom prompt file (default: embedded prompt)"
     ),
     provider: str = typer.Option(
-        "auto", "--provider", help="LLM provider: gemini, openai, or auto"
+        "auto", "--provider", help="LLM provider: gemini, openai, anthropic, or auto"
     ),
     model: str = typer.Option(DEFAULT_MODEL, "--model", "-m", help="Model name"),
     format: str = typer.Option("json", "--format", "-f", help="Output format: json or markdown"),
@@ -534,6 +571,9 @@ def analyze_pr(
         None, "--gemini-api-key", help="Gemini / Google AI Studio API key"
     ),
     openai_api_key: Optional[str] = typer.Option(None, "--openai-api-key", help="OpenAI API key"),
+    anthropic_api_key: Optional[str] = typer.Option(
+        None, "--anthropic-api-key", help="Anthropic API key", envvar="ANTHROPIC_API_KEY"
+    ),
     github_token: Optional[str] = typer.Option(None, "--github-token", help="GitHub token"),
     api_base_url: Optional[str] = typer.Option(
         None, "--api-base-url", help="Base URL for OpenAI-compatible API endpoint"
@@ -566,6 +606,7 @@ def analyze_pr(
         dry_run=dry_run,
         openai_api_key=openai_api_key,
         gemini_api_key=gemini_api_key,
+        anthropic_api_key=anthropic_api_key,
         provider=provider,
         github_token=github_token,
         verbose=verbose,
@@ -597,7 +638,7 @@ def batch_analyze(
         None, "--prompt-file", "-p", help="Path to custom prompt file (default: embedded prompt)"
     ),
     provider: str = typer.Option(
-        "auto", "--provider", help="LLM provider: gemini, openai, or auto"
+        "auto", "--provider", help="LLM provider: gemini, openai, anthropic, or auto"
     ),
     model: str = typer.Option(DEFAULT_MODEL, "--model", "-m", help="Model name"),
     timeout: float = typer.Option(
@@ -642,6 +683,9 @@ def batch_analyze(
         None, "--gemini-api-key", help="Gemini / Google AI Studio API key"
     ),
     openai_api_key: Optional[str] = typer.Option(None, "--openai-api-key", help="OpenAI API key"),
+    anthropic_api_key: Optional[str] = typer.Option(
+        None, "--anthropic-api-key", help="Anthropic API key", envvar="ANTHROPIC_API_KEY"
+    ),
     github_tokens: Optional[str] = typer.Option(
         None,
         "--github-tokens",
@@ -711,6 +755,7 @@ def batch_analyze(
             provider=provider,
             openai_api_key=openai_api_key,
             gemini_api_key=gemini_api_key,
+            anthropic_api_key=anthropic_api_key,
         )
 
         # Get GitHub tokens - CLI option takes precedence over environment
@@ -808,6 +853,7 @@ def batch_analyze(
                 github_token=github_token,
                 openai_key=openai_api_key,
                 gemini_key=gemini_api_key,
+                anthropic_key=anthropic_api_key,
                 provider=provider,
                 model=model,
                 timeout=timeout,
@@ -917,7 +963,7 @@ def label_pr(
         None, "--prompt-file", "-p", help="Path to custom prompt file (default: embedded prompt)"
     ),
     provider: str = typer.Option(
-        "auto", "--provider", help="LLM provider: gemini, openai, or auto"
+        "auto", "--provider", help="LLM provider: gemini, openai, anthropic, or auto"
     ),
     model: str = typer.Option(DEFAULT_MODEL, "--model", "-m", help="Model name"),
     timeout: float = typer.Option(
@@ -940,6 +986,9 @@ def label_pr(
         None, "--gemini-api-key", help="Gemini / Google AI Studio API key"
     ),
     openai_api_key: Optional[str] = typer.Option(None, "--openai-api-key", help="OpenAI API key"),
+    anthropic_api_key: Optional[str] = typer.Option(
+        None, "--anthropic-api-key", help="Anthropic API key", envvar="ANTHROPIC_API_KEY"
+    ),
     github_token: Optional[str] = typer.Option(None, "--github-token", help="GitHub token"),
     api_base_url: Optional[str] = typer.Option(
         None, "--api-base-url", help="Base URL for OpenAI-compatible API endpoint"
@@ -955,6 +1004,7 @@ def label_pr(
     - GH_TOKEN or GITHUB_TOKEN: GitHub API token (required for label updates)
     - OPENAI_API_KEY: OpenAI API key
     - GEMINI_API_KEY or GOOGLE_API_KEY: Gemini API key
+    - ANTHROPIC_API_KEY: Anthropic API key
     """
     try:
         # Get PR URL
@@ -980,6 +1030,7 @@ def label_pr(
             provider=provider,
             openai_api_key=openai_api_key,
             gemini_api_key=gemini_api_key,
+            anthropic_api_key=anthropic_api_key,
         )
         final_github_token = github_token or get_github_token()
 
@@ -1004,6 +1055,7 @@ def label_pr(
                 github_token=final_github_token,
                 openai_key=openai_api_key,
                 gemini_key=gemini_api_key,
+                anthropic_key=anthropic_api_key,
                 provider=provider,
                 model=model,
                 timeout=timeout,
@@ -1012,6 +1064,7 @@ def label_pr(
                 sleep_seconds=sleep_seconds,
                 base_url=api_base_url or get_openai_base_url(),
             )
+
         except GitHubAPIError as e:
             if e.status_code == 404:
                 ErrorHandler.handle_github_404(owner, repo, pr, bool(final_github_token))
