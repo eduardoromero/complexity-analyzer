@@ -2,12 +2,15 @@
 
 from unittest.mock import MagicMock, patch
 import pytest
+from openai.types.chat import ChatCompletion, ChatCompletionMessage
+from openai.types.chat.chat_completion import Choice
+from openai.types.completion_usage import CompletionTokensDetails, CompletionUsage
 from pydantic import ValidationError
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
 from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.models.function import FunctionModel
 from pydantic_ai.models.google import GoogleModel
-from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.models.openai import OpenAIChatModel, _map_usage
 from pydantic_ai.models.test import TestModel
 
 from cli.config import get_anthropic_api_key, get_anthropic_base_url
@@ -767,6 +770,85 @@ class TestAnalyzeComplexity:
                 title="Title",
             )
             assert res["tokens"] == 220
+
+    def test_openai_completion_with_tokens_details_extracts_tokens(self):
+        """Test RequestUsage.extract recovers real token counts when genai-prices'
+        extractor chokes on OpenAI's completion_tokens_details (regression test for
+        the output_reasoning_tokens TypeError collapsing usage to 0)."""
+        usage = CompletionUsage(
+            prompt_tokens=1450,
+            completion_tokens=48,
+            total_tokens=1498,
+            completion_tokens_details=CompletionTokensDetails(reasoning_tokens=0, audio_tokens=0),
+        )
+        chat_completion = ChatCompletion(
+            id="chatcmpl-test",
+            choices=[
+                Choice(
+                    finish_reason="stop",
+                    index=0,
+                    message=ChatCompletionMessage(role="assistant", content="hi"),
+                )
+            ],
+            created=0,
+            model="gpt-4o",
+            object="chat.completion",
+            usage=usage,
+        )
+
+        result = _map_usage(
+            chat_completion,
+            provider="openai",
+            provider_url="https://api.openai.com/v1",
+            model="gpt-4o",
+        )
+
+        assert result.total_tokens == 1498
+        assert result.input_tokens == 1450
+        assert result.output_tokens == 48
+
+    def test_analyze_complexity_returns_openai_token_count(self):
+        """Test analyze_complexity surfaces the real OpenAI token count instead of 0."""
+        test_model = TestModel()
+        provider = PydanticAIProvider(provider="openai", model=test_model)
+
+        mock_result = MagicMock()
+        mock_result.output = ComplexityResult(complexity=5, explanation="Solid PR")
+        usage = CompletionUsage(
+            prompt_tokens=1450,
+            completion_tokens=48,
+            total_tokens=1498,
+            completion_tokens_details=CompletionTokensDetails(reasoning_tokens=0, audio_tokens=0),
+        )
+        chat_completion = ChatCompletion(
+            id="chatcmpl-test",
+            choices=[
+                Choice(
+                    finish_reason="stop",
+                    index=0,
+                    message=ChatCompletionMessage(role="assistant", content="hi"),
+                )
+            ],
+            created=0,
+            model="gpt-4o",
+            object="chat.completion",
+            usage=usage,
+        )
+        mock_result.usage.return_value = _map_usage(
+            chat_completion,
+            provider="openai",
+            provider_url="https://api.openai.com/v1",
+            model="gpt-4o",
+        )
+
+        with patch.object(provider._agent, "run_sync", return_value=mock_result):
+            res = provider.analyze_complexity(
+                prompt="Analyze",
+                diff_excerpt="diff",
+                stats_json="{}",
+                title="Title",
+            )
+            assert res["tokens"] == 1498
 
 
 class TestLLMError:
