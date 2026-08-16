@@ -34,7 +34,7 @@ inputs:
     required: false
     default: ${{ github.token }}
   model:
-    description: 'Model name (e.g. gpt-5.2, gemini-flash-latest, claude-sonnet-latest)'
+    description: 'Model name (e.g. gpt-5.2, gemini-flash-latest, claude-3-7-sonnet-latest)'
     required: false
     default: ''
   format:
@@ -70,7 +70,7 @@ outputs:
   explanation:
     description: 'Explanation of the complexity score'
   model:
-    description: 'Model used for analysis (e.g., gpt-5.2, gemini-flash-latest, claude-sonnet-latest)'
+    description: 'Model used for analysis (e.g., gpt-5.2, gemini-flash-latest, claude-3-7-sonnet-latest)'
   output:
     description: 'Full analysis result in JSON format'
 

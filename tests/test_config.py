@@ -315,11 +315,11 @@ class TestAnalysisConfigValidation:
         """Test an Anthropic-flavoured config carries provider, model and key."""
         config = AnalysisConfig(
             provider="anthropic",
-            model="claude-sonnet-latest",
+            model="claude-3-7-sonnet-latest",
             anthropic_key="sk-ant-test-key",
         )
         assert config.provider == "anthropic"
-        assert config.model == "claude-sonnet-latest"
+        assert config.model == "claude-3-7-sonnet-latest"
         assert config.anthropic_key == "sk-ant-test-key"
         assert config.openai_key is None
         assert config.gemini_key is None
