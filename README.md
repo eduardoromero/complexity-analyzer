@@ -86,10 +86,10 @@ complexity-cli analyze-pr "https://github.com/owner/repo/pull/123"
 - `--provider`: LLM provider: `openai`, `gemini`, `anthropic`, or `auto` (default: `auto`)
 - `--prompt-file`, `-p`: Path to custom prompt file (default: embedded prompt)
 - `--model`, `-m`: Model name (default: `gpt-5.2` for OpenAI, `gemini-flash-latest` for Gemini, `claude-sonnet-4-5` for Anthropic).
-  OpenAI models with `-luna` in the name are sent to the OpenAI Responses API (`/v1/responses`)
-  instead of Chat Completions, since Luna rejects function tools on Chat Completions. Note that
-  most OpenAI-compatible proxies used via `--api-base-url` do not serve `/v1/responses`, so
-  `-luna` model names are best used against the official OpenAI API.
+  The tool sends OpenAI models with `-luna` in the name to the Responses API (`/v1/responses`),
+  because Luna rejects function tools on the Chat Completions API. Most OpenAI-compatible
+  proxies do not serve `/v1/responses`. If you point `--api-base-url` at a proxy, do not use
+  `-luna` model names.
 - `--openai-api-key`: OpenAI API key (overrides `OPENAI_API_KEY`)
 - `--gemini-api-key`: Gemini / Google AI Studio API key (overrides `GEMINI_API_KEY`)
 - `--anthropic-api-key`: Anthropic API key (overrides `ANTHROPIC_API_KEY`)
@@ -109,22 +109,21 @@ complexity-cli analyze-pr "https://github.com/owner/repo/pull/123"
 - `ANTHROPIC_API_KEY`: Anthropic Claude API key
 - `GH_TOKEN` or `GITHUB_TOKEN` (optional): GitHub API token for private repos or higher rate limits
 
-### Multi-Provider Support (Additive)
+### Multi-Provider Support
 
-Google Gemini and Anthropic Claude are supported as additional providers alongside OpenAI. This is
-strictly additive: the original OpenAI workflow is unchanged. With only
-`OPENAI_API_KEY` set (or `--openai-api-key` passed), the tool behaves exactly as
-before, defaulting to the OpenAI provider and the `gpt-5.2` model.
+The tool supports Google Gemini and Anthropic Claude as additional providers. The original
+OpenAI workflow is unchanged. If you set only `OPENAI_API_KEY` (or pass `--openai-api-key`),
+the tool uses the OpenAI provider and the `gpt-5.2` model, the same behavior as before.
 
-Provider auto-detection (`--provider auto`, the default):
+Provider auto-detection (`--provider auto`, the default) applies these rules:
 
-- Only `OPENAI_API_KEY` set → OpenAI with `gpt-5.2`
-- Only `GEMINI_API_KEY`/`GOOGLE_API_KEY` set → Gemini with `gemini-flash-latest`
-- Only `ANTHROPIC_API_KEY` set → Anthropic with `claude-sonnet-4-5`
-- Multiple set → OpenAI wins (original behavior)
+- If only `OPENAI_API_KEY` is set, the tool uses OpenAI with `gpt-5.2`.
+- If only `GEMINI_API_KEY` or `GOOGLE_API_KEY` is set, the tool uses Gemini with `gemini-flash-latest`.
+- If only `ANTHROPIC_API_KEY` is set, the tool uses Anthropic with `claude-sonnet-4-5`.
+- If more than one key is set, the tool uses OpenAI. This is the original behavior.
 
 ```bash
-# Original OpenAI usage — unchanged
+# Original OpenAI usage (unchanged)
 export OPENAI_API_KEY="your-key"
 complexity-cli analyze-pr "https://github.com/owner/repo/pull/123"
 
