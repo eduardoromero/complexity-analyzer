@@ -4,9 +4,12 @@ import json
 import re
 from unittest.mock import patch
 
+import pytest
 from typer.testing import CliRunner
 
-from cli.main import app
+from cli.constants import DEFAULT_GEMINI_MODEL, DEFAULT_MODEL
+from cli.llm import LLMError
+from cli.main import app, resolve_provider_credentials
 
 runner = CliRunner()
 
@@ -105,7 +108,7 @@ class TestAnalyzePrCommand:
             call_kwargs = mock_get_provider.call_args.kwargs
             assert call_kwargs["provider"] == "gemini"
             assert call_kwargs["api_key"] == "gemini-secret"
-            assert call_kwargs["model"] == "gemini-flash-latest"
+            assert call_kwargs["model"] == DEFAULT_GEMINI_MODEL
 
     @patch("cli.main.fetch_pr")
     @patch("cli.main.get_provider")
@@ -185,6 +188,84 @@ class TestAnalyzePrCommand:
             call_kwargs = mock_get_provider.call_args.kwargs
             assert call_kwargs["provider"] == "gemini"
             assert call_kwargs["api_key"] == "AIza-explicit-key"
+
+    @patch("cli.main.fetch_pr")
+    @patch("cli.main.get_provider")
+    def test_explicit_openai_provider_option(self, mock_get_provider, mock_fetch):
+        """Test --provider openai with --openai-api-key routes to the OpenAI provider."""
+        mock_fetch.return_value = (
+            "diff --git a/file.py b/file.py\n+line1",
+            {"title": "Test PR", "additions": 10, "deletions": 5, "files": [], "changed_files": 1},
+        )
+        mock_get_provider.return_value.analyze_complexity.return_value = {
+            "complexity": 6,
+            "explanation": "Medium",
+            "provider": "openai",
+            "model": DEFAULT_MODEL,
+        }
+
+        result = runner.invoke(
+            app,
+            [
+                "analyze-pr",
+                "https://github.com/owner/repo/pull/123",
+                "--provider",
+                "openai",
+                "--openai-api-key",
+                "sk-test-key",
+            ],
+        )
+        assert result.exit_code == 0
+        call_kwargs = mock_get_provider.call_args.kwargs
+        assert call_kwargs["provider"] == "openai"
+        assert call_kwargs["api_key"] == "sk-test-key"
+        assert call_kwargs["model"] == DEFAULT_MODEL
+
+    @patch("cli.main.fetch_pr")
+    @patch("cli.main.get_provider")
+    def test_gemini_provider_keeps_model_override(self, mock_get_provider, mock_fetch):
+        """Test --model is honoured alongside --provider gemini."""
+        mock_fetch.return_value = (
+            "diff --git a/file.py b/file.py\n+line1",
+            {"title": "Test PR", "additions": 10, "deletions": 5, "files": [], "changed_files": 1},
+        )
+        mock_get_provider.return_value.analyze_complexity.return_value = {
+            "complexity": 2,
+            "explanation": "Low",
+            "provider": "gemini",
+            "model": "gemini-2.5-pro",
+        }
+
+        result = runner.invoke(
+            app,
+            [
+                "analyze-pr",
+                "https://github.com/owner/repo/pull/123",
+                "--provider",
+                "gemini",
+                "--gemini-api-key",
+                "AIza-test-key",
+                "--model",
+                "gemini-2.5-pro",
+            ],
+        )
+        assert result.exit_code == 0
+        assert mock_get_provider.call_args.kwargs["model"] == "gemini-2.5-pro"
+
+    def test_explicit_gemini_provider_without_gemini_key_fails_preflight(self):
+        """Test --provider gemini without a Gemini key fails pre-flight with a clean error."""
+        with patch.dict("os.environ", {"OPENAI_API_KEY": "sk-ambient"}, clear=True):
+            result = runner.invoke(
+                app,
+                [
+                    "analyze-pr",
+                    "https://github.com/owner/repo/pull/123",
+                    "--provider",
+                    "gemini",
+                ],
+            )
+            assert result.exit_code != 0
+            assert "GEMINI_API_KEY" in result.output
 
     def test_explicit_openai_provider_without_openai_key_fails_preflight(self):
         """Test explicit --provider openai without OpenAI key fails pre-flight with clean error."""
@@ -310,6 +391,40 @@ class TestBatchAnalyzeCommand:
         assert call_kwargs["provider"] == "gemini"
         assert call_kwargs["gemini_api_key"] == "test-gemini-key"
 
+    @patch("cli.main.resolve_provider_credentials")
+    @patch("cli.main.load_pr_urls_from_file")
+    @patch("cli.main.run_batch_analysis_with_labels")
+    def test_batch_analyze_openai_provider(self, mock_batch, mock_urls, mock_resolve):
+        """Test batch-analyze with openai provider and key."""
+        mock_urls.return_value = ["https://github.com/owner/repo/pull/1"]
+        result = runner.invoke(
+            app,
+            [
+                "batch-analyze",
+                "--input-file",
+                "prs.txt",
+                "--output",
+                "out.csv",
+                "--provider",
+                "openai",
+                "--openai-api-key",
+                "sk-test-key",
+            ],
+        )
+        assert result.exit_code == 0
+        call_kwargs = mock_resolve.call_args.kwargs
+        assert call_kwargs["provider"] == "openai"
+        assert call_kwargs["openai_api_key"] == "sk-test-key"
+
+    def test_help_shows_provider_options(self):
+        """Test that batch-analyze help advertises the multi-provider options."""
+        result = runner.invoke(app, ["batch-analyze", "--help"])
+        assert result.exit_code == 0
+        output = strip_ansi(result.output)
+        assert "--provider" in output
+        assert "--gemini-api-key" in output
+        assert "--openai-api-key" in output
+
 
 class TestLabelPrCommand:
     """Tests for the label-pr command."""
@@ -329,6 +444,79 @@ class TestLabelPrCommand:
         output = strip_ansi(result.output)
         assert "--label-prefix" in output
         assert "--dry-run" in output
+        assert "--provider" in output
+        assert "--gemini-api-key" in output
+        assert "--openai-api-key" in output
+
+
+class TestResolveProviderCredentials:
+    """Tests for the shared provider/credential resolution used by every command."""
+
+    def test_auto_selects_gemini_from_env(self, monkeypatch):
+        """GEMINI_API_KEY alone resolves to the Gemini provider."""
+        monkeypatch.setenv("GEMINI_API_KEY", "AIza-env")
+        assert resolve_provider_credentials("auto") == ("gemini", "AIza-env")
+
+    def test_auto_selects_openai_from_env(self, monkeypatch):
+        """OPENAI_API_KEY alone resolves to the OpenAI provider."""
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-env")
+        assert resolve_provider_credentials("auto") == ("openai", "sk-env")
+
+    def test_auto_prefers_openai_when_both_env_keys_present(self, monkeypatch):
+        """With both env keys set, OpenAI wins."""
+        monkeypatch.setenv("GEMINI_API_KEY", "AIza-env")
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-env")
+        assert resolve_provider_credentials("auto") == ("openai", "sk-env")
+
+    def test_auto_prefers_explicit_argument_over_env(self, monkeypatch):
+        """An explicit gemini_api_key argument beats an ambient OpenAI env key."""
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-env")
+        assert resolve_provider_credentials("auto", gemini_api_key="AIza-arg") == (
+            "gemini",
+            "AIza-arg",
+        )
+
+    def test_auto_without_any_key_raises(self):
+        """No credentials at all is a ValueError naming both env vars."""
+        with pytest.raises(ValueError, match="Either GEMINI_API_KEY or OPENAI_API_KEY"):
+            resolve_provider_credentials("auto")
+
+    def test_google_alias_resolves_to_gemini(self, monkeypatch):
+        """The 'google' alias maps onto the Gemini provider."""
+        monkeypatch.setenv("GOOGLE_API_KEY", "AIza-env")
+        assert resolve_provider_credentials("google") == ("gemini", "AIza-env")
+
+    def test_openai_chat_alias_resolves_to_openai(self, monkeypatch):
+        """The 'openai-chat' alias maps onto the OpenAI provider."""
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-env")
+        assert resolve_provider_credentials("openai-chat") == ("openai", "sk-env")
+
+    def test_provider_name_is_normalized(self, monkeypatch):
+        """Provider names are lowercased and stripped before resolution."""
+        monkeypatch.setenv("GEMINI_API_KEY", "AIza-env")
+        assert resolve_provider_credentials("  Gemini ") == ("gemini", "AIza-env")
+
+    def test_explicit_gemini_without_key_raises(self, monkeypatch):
+        """provider='gemini' never falls back to an OpenAI key."""
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-env")
+        with pytest.raises(ValueError, match="GEMINI_API_KEY or GOOGLE_API_KEY"):
+            resolve_provider_credentials("gemini")
+
+    def test_explicit_openai_without_key_raises(self, monkeypatch):
+        """provider='openai' never falls back to a Gemini key."""
+        monkeypatch.setenv("GEMINI_API_KEY", "AIza-env")
+        with pytest.raises(ValueError, match="OPENAI_API_KEY"):
+            resolve_provider_credentials("openai")
+
+    def test_unsupported_provider_raises_llm_error(self):
+        """An unknown provider name is rejected up front."""
+        with pytest.raises(LLMError, match="Unsupported provider: 'anthropic'"):
+            resolve_provider_credentials("anthropic")
+
+    def test_none_provider_defaults_to_auto(self, monkeypatch):
+        """A None provider is treated as 'auto'."""
+        monkeypatch.setenv("GEMINI_API_KEY", "AIza-env")
+        assert resolve_provider_credentials(None) == ("gemini", "AIza-env")
 
 
 class TestMainCallback:
