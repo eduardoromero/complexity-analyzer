@@ -135,7 +135,7 @@ jobs:
 | `pr-url` | GitHub PR URL (e.g., `https://github.com/owner/repo/pull/123`) | Yes | - |
 | `openai-api-key` | OpenAI API key for LLM analysis | Yes | - |
 | `github-token` | GitHub token for API access | No | `${{ github.token }}` |
-| `model` | OpenAI model name (e.g., `gpt-4`, `gpt-5.1`) | No | `gpt-5.1` |
+| `model` | OpenAI model name (e.g., `gpt-4`, `gpt-5.2`) | No | `gpt-5.2` |
 | `format` | Output format: `json` or `markdown` | No | `json` |
 | `output-file` | Path to write output file | No | - |
 | `timeout` | Request timeout in seconds | No | `120` |
@@ -150,7 +150,7 @@ jobs:
 |--------|-------------|
 | `score` | Complexity score from 1-10 |
 | `explanation` | Detailed explanation of the complexity rating |
-| `model` | Model used for analysis (e.g., gpt-4, gpt-5.1) |
+| `model` | Model used for analysis (e.g., gpt-4, gpt-5.2) |
 | `output` | Full JSON output from the analyzer |
 
 ## Output Format
@@ -162,7 +162,7 @@ jobs:
   "score": 5,
   "explanation": "Multiple modules/services with non-trivial control flow changes",
   "provider": "openai",
-  "model": "gpt-5.1",
+  "model": "gpt-5.2",
   "tokens": 1234,
   "timestamp": "2024-01-01T12:00:00Z"
 }
@@ -182,7 +182,7 @@ When using `format: 'markdown'`, the action outputs:
 **Details:**
 - Repository: owner/repo
 - PR: #123
-- Model: gpt-5.1
+- Model: gpt-5.2
 - Tokens used: 1234
 ```
 
@@ -270,18 +270,18 @@ The analyzer returns a score from 1-10:
     openai-api-key: ${{ secrets.OPENAI_API_KEY }}
     model: 'gpt-4'
 
-- name: Analyze with GPT-5.1
+- name: Analyze with GPT-5.2
   id: gpt5
   uses: your-org/complexity-analyzer@main
   with:
     pr-url: ${{ github.event.pull_request.html_url }}
     openai-api-key: ${{ secrets.OPENAI_API_KEY }}
-    model: 'gpt-5.1'
+    model: 'gpt-5.2'
 
 - name: Compare Results
   run: |
     echo "GPT-4 Score: ${{ steps.gpt4.outputs.score }}"
-    echo "GPT-5.1 Score: ${{ steps.gpt5.outputs.score }}"
+    echo "GPT-5.2 Score: ${{ steps.gpt5.outputs.score }}"
 ```
 
 ## Troubleshooting
