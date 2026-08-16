@@ -3,8 +3,10 @@
 from unittest.mock import MagicMock, patch
 import pytest
 from pydantic import ValidationError
-from pydantic_ai.messages import ModelResponse, ToolCallPart
+from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
 from pydantic_ai.models.function import FunctionModel
+from pydantic_ai.models.google import GoogleModel
+from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.models.test import TestModel
 
 from cli.constants import DEFAULT_GEMINI_MODEL, DEFAULT_MODEL
@@ -109,6 +111,45 @@ class TestOpenAIProviderBase:
                     with pytest.raises(LLMError, match="Missing API key"):
                         OpenAIProvider()
 
+    def test_builds_openai_chat_model(self):
+        """Test OpenAI initialization builds a PydanticAI OpenAIChatModel."""
+        provider = OpenAIProvider("test-key", model="gpt-4o")
+        assert isinstance(provider._model_instance, OpenAIChatModel)
+        assert provider._model_instance.model_name == "gpt-4o"
+
+    def test_api_key_forwarded_to_client(self):
+        """Test the API key reaches the underlying AsyncOpenAI client."""
+        provider = OpenAIProvider("sk-test-key")
+        assert provider._model_instance._provider.client.api_key == "sk-test-key"
+
+    def test_api_key_read_from_environment(self):
+        """Test the OpenAI key is resolved from the environment when not passed."""
+        with patch("cli.llm.get_openai_api_key", return_value="sk-env-key"):
+            provider = OpenAIProvider()
+            assert provider._model_instance._provider.client.api_key == "sk-env-key"
+
+    def test_base_url_only_is_allowed_without_api_key(self):
+        """Test a local OpenAI-compatible endpoint works without an API key."""
+        with (
+            patch("cli.llm.get_openai_api_key", return_value=None),
+            patch("cli.llm.get_openai_base_url", return_value=None),
+        ):
+            provider = OpenAIProvider(base_url="http://localhost:1234/v1")
+            assert provider.provider_name == "openai"
+            assert (
+                str(provider._model_instance._provider.client.base_url)
+                == "http://localhost:1234/v1/"
+            )
+
+    def test_base_url_from_environment(self):
+        """Test base_url falls back to OPENAI_BASE_URL from the environment."""
+        with patch("cli.llm.get_openai_base_url", return_value="https://env-proxy.example.com/v1"):
+            provider = OpenAIProvider("test-key")
+            assert (
+                str(provider._model_instance._provider.client.base_url)
+                == "https://env-proxy.example.com/v1/"
+            )
+
 
 class TestGeminiProviderBase:
     """Tests for GeminiProvider base functionality."""
@@ -167,6 +208,89 @@ class TestGeminiProviderBase:
                 with pytest.raises(LLMError, match="Missing API key"):
                     GeminiProvider()
 
+    def test_builds_google_model(self):
+        """Test Gemini initialization builds a PydanticAI GoogleModel."""
+        provider = GeminiProvider("test-key", model="gemini-2.5-flash")
+        assert isinstance(provider._model_instance, GoogleModel)
+        assert provider._model_instance.model_name == "gemini-2.5-flash"
+
+    def test_api_key_read_from_environment(self):
+        """Test the Gemini key is resolved from the environment when not passed."""
+        with patch("cli.llm.get_gemini_api_key", return_value="AIza-env-key") as mock_key:
+            provider = GeminiProvider()
+            mock_key.assert_called_once()
+            assert provider.provider_name == "gemini"
+
+    def test_openai_base_url_is_not_used_for_gemini(self):
+        """Test OPENAI_BASE_URL never leaks into the Google provider."""
+        with patch("cli.llm.get_openai_base_url", return_value="https://openai-proxy.test/v1"):
+            provider = GeminiProvider("test-key")
+            client = provider._model_instance._provider.client
+            http_options = client._api_client._http_options
+            assert "openai-proxy" not in (http_options.base_url or "")
+
+
+class TestProviderAliases:
+    """Tests for provider-name normalization on PydanticAIProvider."""
+
+    def test_google_alias_normalizes_to_gemini(self):
+        """Test 'google' is normalized to 'gemini'."""
+        provider = PydanticAIProvider(provider="google", api_key="test-key")
+        assert provider.provider_name == "gemini"
+        assert isinstance(provider._model_instance, GoogleModel)
+
+    def test_openai_chat_alias_builds_openai_model(self):
+        """Test 'openai-chat' is accepted and builds an OpenAI chat model."""
+        provider = PydanticAIProvider(provider="openai-chat", api_key="test-key")
+        assert provider.provider_name == "openai-chat"
+        assert isinstance(provider._model_instance, OpenAIChatModel)
+
+    def test_provider_name_is_case_and_whitespace_insensitive(self):
+        """Test provider names are lowercased and stripped."""
+        assert PydanticAIProvider(provider="  GEMINI ", api_key="k").provider_name == "gemini"
+        assert PydanticAIProvider(provider="OpenAI", api_key="k").provider_name == "openai"
+
+    def test_default_model_per_provider(self):
+        """Test each provider falls back to its own default model."""
+        assert PydanticAIProvider(provider="gemini", api_key="k").model_name == (
+            DEFAULT_GEMINI_MODEL
+        )
+        assert PydanticAIProvider(provider="openai", api_key="k").model_name == DEFAULT_MODEL
+
+
+class TestStructuredOutput:
+    """Tests that the agent is wired to the ComplexityResult schema."""
+
+    def test_agent_output_type_is_complexity_result(self):
+        """Test the PydanticAI agent validates against ComplexityResult."""
+        provider = PydanticAIProvider(provider="openai", model=TestModel())
+        assert provider._agent.output_type is ComplexityResult
+
+    def test_agent_run_returns_complexity_result_instance(self):
+        """Test the agent output is a validated ComplexityResult, not a raw dict."""
+
+        def respond(messages, info):
+            return ModelResponse(
+                parts=[ToolCallPart("final_result", {"complexity": 3, "explanation": "ok"})]
+            )
+
+        provider = PydanticAIProvider(provider="openai", model=FunctionModel(respond))
+        output = provider._agent.run_sync("prompt").output
+        assert isinstance(output, ComplexityResult)
+        assert output.complexity == 3
+
+    def test_test_model_generates_schema_valid_output(self):
+        """Test TestModel's schema-derived output satisfies ComplexityResult bounds."""
+        provider = PydanticAIProvider(provider="openai", model=TestModel())
+        result = provider.analyze_complexity(
+            prompt="Analyze",
+            diff_excerpt="diff",
+            stats_json="{}",
+            title="Title",
+        )
+        assert 1 <= result["complexity"] <= 10
+        assert isinstance(result["explanation"], str)
+
 
 class TestGetProvider:
     """Tests for get_provider factory function."""
@@ -208,6 +332,45 @@ class TestGetProvider:
                     provider = get_provider("auto")
                     assert isinstance(provider, OpenAIProvider)
                     assert provider.provider_name == "openai"
+
+    def test_get_provider_openai_chat_alias(self):
+        """Test get_provider with the openai-chat alias."""
+        provider = get_provider("openai-chat", api_key="test-key")
+        assert isinstance(provider, OpenAIProvider)
+        assert provider.provider_name == "openai"
+
+    def test_get_provider_uses_provider_default_model(self):
+        """Test get_provider substitutes each provider's default model when none is given."""
+        assert get_provider("gemini", api_key="test-key").model_name == DEFAULT_GEMINI_MODEL
+        assert get_provider("openai", api_key="test-key").model_name == DEFAULT_MODEL
+
+    def test_get_provider_forwards_base_url_and_timeout(self):
+        """Test get_provider plumbs base_url and timeout to the built client."""
+        provider = get_provider(
+            "openai",
+            api_key="test-key",
+            base_url="https://proxy.example.com/v1",
+            timeout=7.0,
+        )
+        client = provider._model_instance._provider.client
+        assert str(client.base_url) == "https://proxy.example.com/v1/"
+        assert client.timeout.read == 7.0
+
+    def test_get_provider_auto_prefers_openai_when_both_env_keys_set(self):
+        """Test auto-detection picks OpenAI when both env keys are present."""
+        with (
+            patch.dict("os.environ", {}, clear=True),
+            patch("cli.llm.get_gemini_api_key", return_value="AIza-key"),
+            patch("cli.llm.get_openai_api_key", return_value="sk-key"),
+        ):
+            provider = get_provider("auto")
+            assert isinstance(provider, OpenAIProvider)
+            assert provider.provider_name == "openai"
+
+    def test_get_provider_name_is_case_insensitive(self):
+        """Test provider names are normalized before lookup."""
+        assert get_provider("GEMINI", api_key="test-key").provider_name == "gemini"
+        assert get_provider(" OpenAI ", api_key="test-key").provider_name == "openai"
 
     def test_get_provider_auto_with_explicit_gemini_key(self):
         """Test get_provider auto with explicit Gemini key (starts with AIza)."""
@@ -334,6 +497,71 @@ class TestAnalyzeComplexity:
                 stats_json="{}",
                 title="Title",
             )
+
+    def test_analyze_complexity_wrong_field_types_raise_llm_error(self):
+        """Test structurally invalid tool arguments surface as LLMError."""
+
+        def wrong_types(messages, info):
+            return ModelResponse(
+                parts=[
+                    ToolCallPart("final_result", {"complexity": "very high", "explanation": None})
+                ]
+            )
+
+        provider = PydanticAIProvider(
+            provider="openai", model=FunctionModel(wrong_types), retries=1
+        )
+
+        with pytest.raises(LLMError, match="Failed to parse or validate LLM response"):
+            provider.analyze_complexity(
+                prompt="Analyze",
+                diff_excerpt="diff",
+                stats_json="{}",
+                title="Title",
+            )
+
+    def test_analyze_complexity_plain_text_response_raises_llm_error(self):
+        """Test a prose reply with no structured output surfaces as LLMError."""
+
+        def text_only(messages, info):
+            return ModelResponse(parts=[TextPart("This PR looks like a 5 to me.")])
+
+        provider = PydanticAIProvider(provider="gemini", model=FunctionModel(text_only), retries=1)
+
+        with pytest.raises(LLMError, match="Failed to parse or validate LLM response from gemini"):
+            provider.analyze_complexity(
+                prompt="Analyze",
+                diff_excerpt="diff",
+                stats_json="{}",
+                title="Title",
+            )
+
+    def test_analyze_complexity_recovers_after_invalid_response(self):
+        """Test PydanticAI retries a schema violation and returns the corrected result."""
+        calls = {"n": 0}
+
+        def flaky(messages, info):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return ModelResponse(
+                    parts=[ToolCallPart("final_result", {"complexity": 99, "explanation": "bad"})]
+                )
+            return ModelResponse(
+                parts=[ToolCallPart("final_result", {"complexity": 7, "explanation": "good"})]
+            )
+
+        provider = PydanticAIProvider(provider="gemini", model=FunctionModel(flaky), retries=2)
+        result = provider.analyze_complexity(
+            prompt="Analyze",
+            diff_excerpt="diff",
+            stats_json="{}",
+            title="Title",
+        )
+
+        assert calls["n"] == 2
+        assert result["complexity"] == 7
+        assert result["explanation"] == "good"
+        assert result["provider"] == "gemini"
 
     def test_bounded_request_count_on_schema_error(self):
         """Test that schema validation retries are bounded to retries + 1 (e.g. 4 total)."""

@@ -8,8 +8,11 @@ from cli.config import (
     validate_pr_number,
     get_github_tokens,
     get_gemini_api_key,
+    get_openai_api_key,
+    get_openai_base_url,
 )
 from cli.config_types import AnalysisConfig, BatchConfig, OutputConfig
+from cli.constants import DEFAULT_MODEL
 
 
 def test_validate_owner_repo_valid():
@@ -134,6 +137,57 @@ class TestGetGeminiApiKey:
         """Test that GEMINI_API_KEY takes precedence over GOOGLE_API_KEY."""
         assert get_gemini_api_key() == "gemini_key"
 
+    @patch.dict(
+        os.environ,
+        {"GEMINI_API_KEY": "", "GOOGLE_API_KEY": "google_key"},
+        clear=True,
+    )
+    def test_empty_gemini_key_falls_back_to_google_key(self):
+        """Test an empty GEMINI_API_KEY falls back to GOOGLE_API_KEY."""
+        assert get_gemini_api_key() == "google_key"
+
+    @patch.dict(os.environ, {"OPENAI_API_KEY": "openai_key"}, clear=True)
+    def test_gemini_key_ignores_openai_key(self):
+        """Test that an OpenAI key never satisfies the Gemini lookup."""
+        assert get_gemini_api_key() is None
+
+
+# get_openai_api_key / get_openai_base_url tests
+
+
+class TestGetOpenAIConfig:
+    """Tests for the OpenAI credential helpers."""
+
+    @patch.dict(os.environ, {}, clear=True)
+    def test_no_key_returns_none(self):
+        """Test that None is returned when OPENAI_API_KEY is unset."""
+        assert get_openai_api_key() is None
+
+    @patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=True)
+    def test_key_from_openai_api_key(self):
+        """Test getting the key from OPENAI_API_KEY."""
+        assert get_openai_api_key() == "sk-test"
+
+    @patch.dict(os.environ, {"GEMINI_API_KEY": "gemini_key"}, clear=True)
+    def test_openai_key_ignores_gemini_key(self):
+        """Test that a Gemini key never satisfies the OpenAI lookup."""
+        assert get_openai_api_key() is None
+
+    @patch.dict(os.environ, {}, clear=True)
+    def test_no_base_url_returns_none(self):
+        """Test that None is returned when OPENAI_BASE_URL is unset."""
+        assert get_openai_base_url() is None
+
+    @patch.dict(os.environ, {"OPENAI_BASE_URL": ""}, clear=True)
+    def test_empty_base_url_returns_none(self):
+        """Test that an empty OPENAI_BASE_URL is normalized to None."""
+        assert get_openai_base_url() is None
+
+    @patch.dict(os.environ, {"OPENAI_BASE_URL": "https://proxy.test/v1"}, clear=True)
+    def test_base_url_from_env(self):
+        """Test getting the base URL from OPENAI_BASE_URL."""
+        assert get_openai_base_url() == "https://proxy.test/v1"
+
 
 # AnalysisConfig validation tests
 
@@ -205,10 +259,54 @@ class TestAnalysisConfigValidation:
         with pytest.raises(ValueError, match="provider must be"):
             AnalysisConfig(provider="anthropic")
 
+    def test_provider_rejects_aliases_and_casing(self):
+        """Test that only the canonical lowercase provider names are accepted."""
+        for value in ("google", "openai-chat", "Gemini", "OPENAI", " gemini ", ""):
+            with pytest.raises(ValueError, match="provider must be"):
+                AnalysisConfig(provider=value)
+
     def test_gemini_key_defaults_to_none(self):
         """Test that gemini_key defaults to None."""
         config = AnalysisConfig()
         assert config.gemini_key is None
+
+    def test_gemini_provider_config(self):
+        """Test a Gemini-flavoured config carries provider, model and key."""
+        config = AnalysisConfig(
+            provider="gemini",
+            model="gemini-flash-latest",
+            gemini_key="AIza-test-key",
+        )
+        assert config.provider == "gemini"
+        assert config.model == "gemini-flash-latest"
+        assert config.gemini_key == "AIza-test-key"
+        assert config.openai_key is None
+
+    def test_openai_provider_config(self):
+        """Test an OpenAI-flavoured config carries provider, model and key."""
+        config = AnalysisConfig(
+            provider="openai",
+            model="gpt-5.2",
+            openai_key="sk-test-key",
+        )
+        assert config.provider == "openai"
+        assert config.model == "gpt-5.2"
+        assert config.openai_key == "sk-test-key"
+        assert config.gemini_key is None
+
+    def test_both_provider_keys_can_coexist(self):
+        """Test both keys may be supplied so 'auto' can choose between them."""
+        config = AnalysisConfig(
+            provider="auto",
+            gemini_key="AIza-test-key",
+            openai_key="sk-test-key",
+        )
+        assert config.gemini_key == "AIza-test-key"
+        assert config.openai_key == "sk-test-key"
+
+    def test_defaults_to_openai_model(self):
+        """Test the default model is the OpenAI default, matching provider='auto'."""
+        assert AnalysisConfig().model == DEFAULT_MODEL
 
 
 # BatchConfig validation tests
