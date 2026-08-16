@@ -10,7 +10,7 @@ from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
 from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.models.function import FunctionModel
 from pydantic_ai.models.google import GoogleModel
-from pydantic_ai.models.openai import OpenAIChatModel, _map_usage
+from pydantic_ai.models.openai import OpenAIChatModel, OpenAIResponsesModel, _map_usage
 from pydantic_ai.models.test import TestModel
 
 from cli.config import get_anthropic_api_key, get_anthropic_base_url
@@ -127,6 +127,12 @@ class TestOpenAIProviderBase:
         provider = OpenAIProvider("test-key", model="gpt-4o")
         assert isinstance(provider._model_instance, OpenAIChatModel)
         assert provider._model_instance.model_name == "gpt-4o"
+
+    def test_luna_model_uses_responses_api(self):
+        """Test Luna models use the Responses API required for structured output."""
+        provider = OpenAIProvider("test-key", model="gpt-5.6-luna")
+        assert isinstance(provider._model_instance, OpenAIResponsesModel)
+        assert provider._model_instance.model_name == "gpt-5.6-luna"
 
     def test_api_key_forwarded_to_client(self):
         """Test the API key reaches the underlying AsyncOpenAI client."""
@@ -897,7 +903,7 @@ class TestProviderRegistry:
         prov, key, model = resolve_provider("auto")
         assert prov == "anthropic"
         assert key == "sk-ant-env"
-        assert model == "claude-3-7-sonnet-latest"
+        assert model == DEFAULT_ANTHROPIC_MODEL
 
         monkeypatch.setenv("OPENAI_API_KEY", "sk-env")
         prov, key, model = resolve_provider("auto")

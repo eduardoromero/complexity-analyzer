@@ -243,7 +243,7 @@ class TestLegacyCliInvocation:
     @patch("cli.main.fetch_pr")
     @patch("cli.main.get_provider")
     def test_anthropic_key_only_resolves_to_anthropic(self, mock_get_provider, mock_fetch):
-        """When ONLY ANTHROPIC_API_KEY is set, CLI resolves to Anthropic (claude-3-7-sonnet-latest)."""
+        """When only ANTHROPIC_API_KEY is set, the CLI uses the Anthropic default."""
         from cli.constants import DEFAULT_ANTHROPIC_MODEL
 
         mock_fetch.return_value = (FAKE_DIFF, FAKE_META)

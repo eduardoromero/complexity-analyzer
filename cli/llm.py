@@ -9,7 +9,7 @@ from pydantic_ai.exceptions import UnexpectedModelBehavior
 from pydantic_ai.models import Model
 from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.models.google import GoogleModel
-from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.models.openai import OpenAIChatModel, OpenAIResponsesModel
 from pydantic_ai.providers.anthropic import AnthropicProvider as PydanticAnthropicProvider
 from pydantic_ai.providers.google import GoogleProvider
 from pydantic_ai.providers.openai import OpenAIProvider as PydanticOpenAIProvider
@@ -76,6 +76,11 @@ def _strip_prefix(name: str, prefixes: tuple[str, ...]) -> str:
         if name.startswith(prefix):
             return name.removeprefix(prefix)
     return name
+
+
+def _uses_openai_responses_api(model_name: str) -> bool:
+    """Return whether an OpenAI model requires the Responses API."""
+    return model_name.endswith("-luna")
 
 
 class LLMError(Exception):
@@ -168,7 +173,12 @@ class PydanticAIProvider(LLMProvider):
                 base_url=resolved_base_url,
                 http_client=http_client,
             )
-            self._model_instance = OpenAIChatModel(self._model_name, provider=openai_prov)
+            model_cls = (
+                OpenAIResponsesModel
+                if _uses_openai_responses_api(self._model_name)
+                else OpenAIChatModel
+            )
+            self._model_instance = model_cls(self._model_name, provider=openai_prov)
 
         self._agent = Agent(self._model_instance, output_type=ComplexityResult, retries=retries)
 
