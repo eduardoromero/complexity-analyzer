@@ -6,13 +6,22 @@ import httpx
 from pydantic_ai import Agent
 from pydantic_ai.exceptions import UnexpectedModelBehavior
 from pydantic_ai.models import Model
+from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.models.google import GoogleModel
 from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.providers.anthropic import AnthropicProvider as PydanticAnthropicProvider
 from pydantic_ai.providers.google import GoogleProvider
 from pydantic_ai.providers.openai import OpenAIProvider as PydanticOpenAIProvider
 
-from .config import get_gemini_api_key, get_openai_api_key, get_openai_base_url
+from .config import (
+    get_anthropic_api_key,
+    get_anthropic_base_url,
+    get_gemini_api_key,
+    get_openai_api_key,
+    get_openai_base_url,
+)
 from .constants import (
+    DEFAULT_ANTHROPIC_MODEL,
     DEFAULT_GEMINI_MODEL,
     DEFAULT_MAX_RETRIES,
     DEFAULT_MODEL,
@@ -24,6 +33,7 @@ from .scoring import ComplexityResult
 
 _GEMINI_PREFIXES = ("gemini:", "google-gla:", "google-vertex:", "google:")
 _OPENAI_PREFIXES = ("openai:", "openai-chat:")
+_ANTHROPIC_PREFIXES = ("anthropic:", "claude:")
 
 
 def _strip_prefix(name: str, prefixes: tuple[str, ...]) -> str:
@@ -39,7 +49,7 @@ class LLMError(Exception):
 
 
 class PydanticAIProvider(LLMProvider):
-    """PydanticAI LLM provider supporting Gemini and OpenAI."""
+    """PydanticAI LLM provider supporting Gemini, OpenAI, and Anthropic."""
 
     def __init__(
         self,
@@ -54,7 +64,7 @@ class PydanticAIProvider(LLMProvider):
         Initialize PydanticAI provider.
 
         Args:
-            provider: Provider name ('openai', 'gemini', etc.)
+            provider: Provider name ('openai', 'gemini', 'anthropic', etc.)
             api_key: API key for the provider (or None to infer from environment)
             model: Model name string or Model instance
             timeout: Request timeout in seconds
@@ -64,15 +74,38 @@ class PydanticAIProvider(LLMProvider):
         self._provider_name = provider.lower().strip()
         self.timeout = timeout
 
-        if self._provider_name not in ("openai", "openai-chat", "gemini", "google"):
+        if self._provider_name not in (
+            "openai",
+            "openai-chat",
+            "gemini",
+            "google",
+            "anthropic",
+            "claude",
+        ):
             raise LLMError(f"Unsupported provider: '{provider}'")
 
         if self._provider_name == "google":
             self._provider_name = "gemini"
+        elif self._provider_name == "claude":
+            self._provider_name = "anthropic"
 
         if isinstance(model, Model):
             self._model_instance = model
             self._model_name = model.model_name
+        elif self._provider_name == "anthropic":
+            resolved_key = api_key or get_anthropic_api_key()
+            resolved_base_url = base_url or get_anthropic_base_url()
+            if not resolved_key and not resolved_base_url:
+                raise LLMError("Missing API key for Anthropic provider. Set ANTHROPIC_API_KEY.")
+            model_str = model or DEFAULT_ANTHROPIC_MODEL
+            self._model_name = _strip_prefix(model_str, _ANTHROPIC_PREFIXES)
+            http_client = httpx.AsyncClient(timeout=timeout)
+            anthropic_prov = PydanticAnthropicProvider(
+                api_key=resolved_key,
+                base_url=resolved_base_url,
+                http_client=http_client,
+            )
+            self._model_instance = AnthropicModel(self._model_name, provider=anthropic_prov)
         elif self._provider_name == "gemini":
             resolved_key = api_key or get_gemini_api_key()
             if not resolved_key:
@@ -227,11 +260,35 @@ class GeminiProvider(PydanticAIProvider):
         )
 
 
+class AnthropicProvider(PydanticAIProvider):
+    """Anthropic Claude API provider implementation using PydanticAI."""
+
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        model: str = DEFAULT_ANTHROPIC_MODEL,
+        timeout: float = DEFAULT_TIMEOUT,
+        base_url: Optional[str] = None,
+        retries: int = DEFAULT_MAX_RETRIES,
+    ):
+        """Initialize Anthropic provider."""
+        super().__init__(
+            provider="anthropic",
+            api_key=api_key,
+            model=model,
+            timeout=timeout,
+            base_url=base_url,
+            retries=retries,
+        )
+
+
 _PROVIDERS: Dict[str, tuple[type[PydanticAIProvider], str]] = {
     "openai": (OpenAIProvider, DEFAULT_MODEL),
     "openai-chat": (OpenAIProvider, DEFAULT_MODEL),
     "gemini": (GeminiProvider, DEFAULT_GEMINI_MODEL),
     "google": (GeminiProvider, DEFAULT_GEMINI_MODEL),
+    "anthropic": (AnthropicProvider, DEFAULT_ANTHROPIC_MODEL),
+    "claude": (AnthropicProvider, DEFAULT_ANTHROPIC_MODEL),
 }
 
 
@@ -247,7 +304,7 @@ def get_provider(
     Factory function to get an LLM provider instance.
 
     Args:
-        provider: Provider name ("openai", "gemini", "auto", etc.)
+        provider: Provider name ("openai", "gemini", "anthropic", "auto", etc.)
         api_key: API key for the provider
         model: Model name to use
         base_url: Optional base URL for API endpoints
@@ -279,6 +336,14 @@ def get_provider(
                     base_url=base_url,
                     retries=retries,
                 )
+            if api_key.startswith("sk-ant-"):
+                return AnthropicProvider(
+                    api_key=api_key,
+                    model=model or DEFAULT_ANTHROPIC_MODEL,
+                    timeout=timeout,
+                    base_url=base_url,
+                    retries=retries,
+                )
             if api_key.startswith("sk-"):
                 return OpenAIProvider(
                     api_key=api_key,
@@ -289,14 +354,23 @@ def get_provider(
                 )
             raise LLMError(
                 "Explicit api_key passed with provider='auto'. "
-                "Please specify provider='gemini' or provider='openai'."
+                "Please specify provider='gemini', provider='openai', or provider='anthropic'."
             )
         gemini_key = get_gemini_api_key()
         openai_key = get_openai_api_key()
-        if gemini_key and not openai_key:
+        anthropic_key = get_anthropic_api_key()
+        if gemini_key and not openai_key and not anthropic_key:
             return GeminiProvider(
                 api_key=gemini_key,
                 model=model or DEFAULT_GEMINI_MODEL,
+                timeout=timeout,
+                base_url=base_url,
+                retries=retries,
+            )
+        if anthropic_key and not openai_key and not gemini_key:
+            return AnthropicProvider(
+                api_key=anthropic_key,
+                model=model or DEFAULT_ANTHROPIC_MODEL,
                 timeout=timeout,
                 base_url=base_url,
                 retries=retries,
@@ -309,9 +383,17 @@ def get_provider(
                 base_url=base_url,
                 retries=retries,
             )
+        if anthropic_key:
+            return AnthropicProvider(
+                api_key=anthropic_key,
+                model=model or DEFAULT_ANTHROPIC_MODEL,
+                timeout=timeout,
+                base_url=base_url,
+                retries=retries,
+            )
         raise LLMError(
             "No API key found in environment. "
-            "Set GEMINI_API_KEY / GOOGLE_API_KEY or OPENAI_API_KEY."
+            "Set GEMINI_API_KEY / GOOGLE_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY."
         )
 
     raise LLMError(f"Unsupported provider: '{provider}'")

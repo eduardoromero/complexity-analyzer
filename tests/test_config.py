@@ -249,19 +249,29 @@ class TestAnalysisConfigValidation:
         assert config.provider == "auto"
 
     def test_provider_accepts_valid_values(self):
-        """Test that provider accepts 'auto', 'gemini', and 'openai'."""
+        """Test that provider accepts 'auto', 'gemini', 'openai', and 'anthropic'."""
         assert AnalysisConfig(provider="auto").provider == "auto"
         assert AnalysisConfig(provider="gemini").provider == "gemini"
         assert AnalysisConfig(provider="openai").provider == "openai"
+        assert AnalysisConfig(provider="anthropic").provider == "anthropic"
 
     def test_provider_rejects_invalid_values(self):
         """Test that an invalid provider is rejected."""
         with pytest.raises(ValueError, match="provider must be"):
-            AnalysisConfig(provider="anthropic")
+            AnalysisConfig(provider="cohere")
 
     def test_provider_rejects_aliases_and_casing(self):
         """Test that only the canonical lowercase provider names are accepted."""
-        for value in ("google", "openai-chat", "Gemini", "OPENAI", " gemini ", ""):
+        for value in (
+            "google",
+            "openai-chat",
+            "claude",
+            "Gemini",
+            "OPENAI",
+            "ANTHROPIC",
+            " gemini ",
+            "",
+        ):
             with pytest.raises(ValueError, match="provider must be"):
                 AnalysisConfig(provider=value)
 
@@ -269,6 +279,11 @@ class TestAnalysisConfigValidation:
         """Test that gemini_key defaults to None."""
         config = AnalysisConfig()
         assert config.gemini_key is None
+
+    def test_anthropic_key_defaults_to_none(self):
+        """Test that anthropic_key defaults to None."""
+        config = AnalysisConfig()
+        assert config.anthropic_key is None
 
     def test_gemini_provider_config(self):
         """Test a Gemini-flavoured config carries provider, model and key."""
@@ -281,6 +296,7 @@ class TestAnalysisConfigValidation:
         assert config.model == "gemini-flash-latest"
         assert config.gemini_key == "AIza-test-key"
         assert config.openai_key is None
+        assert config.anthropic_key is None
 
     def test_openai_provider_config(self):
         """Test an OpenAI-flavoured config carries provider, model and key."""
@@ -293,16 +309,38 @@ class TestAnalysisConfigValidation:
         assert config.model == "gpt-5.2"
         assert config.openai_key == "sk-test-key"
         assert config.gemini_key is None
+        assert config.anthropic_key is None
 
-    def test_both_provider_keys_can_coexist(self):
-        """Test both keys may be supplied so 'auto' can choose between them."""
+    def test_anthropic_provider_config(self):
+        """Test an Anthropic-flavoured config carries provider, model and key."""
+        config = AnalysisConfig(
+            provider="anthropic",
+            model="claude-sonnet-latest",
+            anthropic_key="sk-ant-test-key",
+        )
+        assert config.provider == "anthropic"
+        assert config.model == "claude-sonnet-latest"
+        assert config.anthropic_key == "sk-ant-test-key"
+        assert config.openai_key is None
+        assert config.gemini_key is None
+
+    def test_from_env_with_anthropic_key(self):
+        """Test AnalysisConfig.from_env picks up ANTHROPIC_API_KEY from env."""
+        with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "sk-ant-env-123"}, clear=True):
+            config = AnalysisConfig.from_env()
+            assert config.anthropic_key == "sk-ant-env-123"
+
+    def test_all_provider_keys_can_coexist(self):
+        """Test all keys may be supplied so 'auto' can choose between them."""
         config = AnalysisConfig(
             provider="auto",
             gemini_key="AIza-test-key",
             openai_key="sk-test-key",
+            anthropic_key="sk-ant-test-key",
         )
         assert config.gemini_key == "AIza-test-key"
         assert config.openai_key == "sk-test-key"
+        assert config.anthropic_key == "sk-ant-test-key"
 
     def test_defaults_to_openai_model(self):
         """Test the default model is the OpenAI default, matching provider='auto'."""

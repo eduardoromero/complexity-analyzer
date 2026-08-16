@@ -151,11 +151,42 @@ class TestAnalyzePrCommand:
                 "analyze-pr",
                 "https://github.com/owner/repo/pull/123",
                 "--provider",
-                "anthropic",
+                "cohere",
             ],
         )
         assert result.exit_code != 0
         assert "Unsupported provider" in result.output or "Invalid provider" in result.output
+
+    @patch("cli.main.fetch_pr")
+    @patch("cli.main.get_provider")
+    def test_explicit_anthropic_provider_option(self, mock_get_provider, mock_fetch):
+        """Test --provider anthropic with --anthropic-api-key routes to the Anthropic provider."""
+        mock_fetch.return_value = (
+            "diff --git a/file.py b/file.py\n+line1",
+            {"title": "Test PR", "additions": 10, "deletions": 5, "files": [], "changed_files": 1},
+        )
+        mock_get_provider.return_value.analyze_complexity.return_value = {
+            "complexity": 7,
+            "explanation": "High",
+            "provider": "anthropic",
+            "model": "claude-sonnet-latest",
+        }
+
+        result = runner.invoke(
+            app,
+            [
+                "analyze-pr",
+                "https://github.com/owner/repo/pull/123",
+                "--provider",
+                "anthropic",
+                "--anthropic-api-key",
+                "sk-ant-test-key",
+            ],
+        )
+        assert result.exit_code == 0
+        call_kwargs = mock_get_provider.call_args.kwargs
+        assert call_kwargs["provider"] == "anthropic"
+        assert call_kwargs["api_key"] == "sk-ant-test-key"
 
     @patch("cli.main.fetch_pr")
     @patch("cli.main.get_provider")
@@ -194,7 +225,7 @@ class TestAnalyzePrCommand:
     def test_explicit_openai_provider_option(self, mock_get_provider, mock_fetch):
         """Test --provider openai with --openai-api-key routes to the OpenAI provider."""
         mock_fetch.return_value = (
-            "diff --git a/file.py b/file.py\n+line1",
+            "diff --git a me.py b/me.py\n+line1",
             {"title": "Test PR", "additions": 10, "deletions": 5, "files": [], "changed_files": 1},
         )
         mock_get_provider.return_value.analyze_complexity.return_value = {
@@ -281,6 +312,21 @@ class TestAnalyzePrCommand:
             )
             assert result.exit_code != 0
             assert "OPENAI_API_KEY" in result.output
+
+    def test_explicit_anthropic_provider_without_anthropic_key_fails_preflight(self):
+        """Test explicit --provider anthropic without Anthropic key fails pre-flight with clean error."""
+        with patch.dict("os.environ", {"OPENAI_API_KEY": "sk-ambient"}, clear=True):
+            result = runner.invoke(
+                app,
+                [
+                    "analyze-pr",
+                    "https://github.com/owner/repo/pull/123",
+                    "--provider",
+                    "anthropic",
+                ],
+            )
+            assert result.exit_code != 0
+            assert "ANTHROPIC_API_KEY" in result.output
 
 
 class TestRateLimitCommand:
@@ -476,9 +522,14 @@ class TestResolveProviderCredentials:
             "AIza-arg",
         )
 
+    def test_auto_selects_anthropic_from_env(self, monkeypatch):
+        """ANTHROPIC_API_KEY alone resolves to the Anthropic provider."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-env")
+        assert resolve_provider_credentials("auto") == ("anthropic", "sk-ant-env")
+
     def test_auto_without_any_key_raises(self):
-        """No credentials at all is a ValueError naming both env vars."""
-        with pytest.raises(ValueError, match="Either GEMINI_API_KEY or OPENAI_API_KEY"):
+        """No credentials at all is a ValueError naming env vars."""
+        with pytest.raises(ValueError, match="ANTHROPIC_API_KEY"):
             resolve_provider_credentials("auto")
 
     def test_google_alias_resolves_to_gemini(self, monkeypatch):
@@ -491,27 +542,38 @@ class TestResolveProviderCredentials:
         monkeypatch.setenv("OPENAI_API_KEY", "sk-env")
         assert resolve_provider_credentials("openai-chat") == ("openai", "sk-env")
 
+    def test_claude_alias_resolves_to_anthropic(self, monkeypatch):
+        """The 'claude' alias maps onto the Anthropic provider."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-env")
+        assert resolve_provider_credentials("claude") == ("anthropic", "sk-ant-env")
+
     def test_provider_name_is_normalized(self, monkeypatch):
         """Provider names are lowercased and stripped before resolution."""
         monkeypatch.setenv("GEMINI_API_KEY", "AIza-env")
         assert resolve_provider_credentials("  Gemini ") == ("gemini", "AIza-env")
 
     def test_explicit_gemini_without_key_raises(self, monkeypatch):
-        """provider='gemini' never falls back to an OpenAI key."""
+        """provider='gemini' never falls back to an OpenAI or Anthropic key."""
         monkeypatch.setenv("OPENAI_API_KEY", "sk-env")
         with pytest.raises(ValueError, match="GEMINI_API_KEY or GOOGLE_API_KEY"):
             resolve_provider_credentials("gemini")
 
     def test_explicit_openai_without_key_raises(self, monkeypatch):
-        """provider='openai' never falls back to a Gemini key."""
+        """provider='openai' never falls back to a Gemini or Anthropic key."""
         monkeypatch.setenv("GEMINI_API_KEY", "AIza-env")
         with pytest.raises(ValueError, match="OPENAI_API_KEY"):
             resolve_provider_credentials("openai")
 
+    def test_explicit_anthropic_without_key_raises(self, monkeypatch):
+        """provider='anthropic' never falls back to another key."""
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-env")
+        with pytest.raises(ValueError, match="ANTHROPIC_API_KEY"):
+            resolve_provider_credentials("anthropic")
+
     def test_unsupported_provider_raises_llm_error(self):
         """An unknown provider name is rejected up front."""
-        with pytest.raises(LLMError, match="Unsupported provider: 'anthropic'"):
-            resolve_provider_credentials("anthropic")
+        with pytest.raises(LLMError, match="Unsupported provider: 'unknown_prov'"):
+            resolve_provider_credentials("unknown_prov")
 
     def test_none_provider_defaults_to_auto(self, monkeypatch):
         """A None provider is treated as 'auto'."""

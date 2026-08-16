@@ -83,8 +83,13 @@ complexity-cli analyze-pr "https://github.com/owner/repo/pull/123"
 
 ### Options
 
+- `--provider`: LLM provider: `openai`, `gemini`, `anthropic`, or `auto` (default: `auto`)
 - `--prompt-file`, `-p`: Path to custom prompt file (default: embedded prompt)
-- `--model`, `-m`: Model name (default: `gpt-5.2`)
+- `--model`, `-m`: Model name (default: `gpt-5.2` for OpenAI, `gemini-flash-latest` for Gemini, `claude-sonnet-latest` for Anthropic)
+- `--openai-api-key`: OpenAI API key (overrides `OPENAI_API_KEY`)
+- `--gemini-api-key`: Gemini / Google AI Studio API key (overrides `GEMINI_API_KEY`)
+- `--anthropic-api-key`: Anthropic API key (overrides `ANTHROPIC_API_KEY`)
+- `--api-base-url`: Base URL for an OpenAI-compatible API endpoint
 - `--format`, `-f`: Output format: `json` or `markdown` (default: `json`)
 - `--output-file`, `-o`: Write output to file
 - `--timeout`, `-t`: Request timeout in seconds (default: 120)
@@ -92,20 +97,17 @@ complexity-cli analyze-pr "https://github.com/owner/repo/pull/123"
 - `--hunks-per-file`: Maximum hunks per file (default: 2)
 - `--sleep-seconds`: Sleep between GitHub API calls (default: 0.7)
 - `--dry-run`: Fetch PR but don't call LLM
-- `--provider`: LLM provider: `openai`, `gemini`, or `auto` (default: `auto`)
-- `--openai-api-key`: OpenAI API key (overrides `OPENAI_API_KEY`)
-- `--gemini-api-key`: Gemini / Google AI Studio API key (overrides `GEMINI_API_KEY`)
-- `--api-base-url`: Base URL for an OpenAI-compatible API endpoint
 
 ### Environment Variables
 
-- `OPENAI_API_KEY` (required unless using Gemini): OpenAI API key
-- `GEMINI_API_KEY` or `GOOGLE_API_KEY` (optional): Gemini / Google AI Studio API key
+- `OPENAI_API_KEY`: OpenAI API key
+- `GEMINI_API_KEY` or `GOOGLE_API_KEY`: Gemini / Google AI Studio API key
+- `ANTHROPIC_API_KEY`: Anthropic Claude API key
 - `GH_TOKEN` or `GITHUB_TOKEN` (optional): GitHub API token for private repos or higher rate limits
 
 ### Multi-Provider Support (Additive)
 
-Google Gemini is supported as an additional provider alongside OpenAI. This is
+Google Gemini and Anthropic Claude are supported as additional providers alongside OpenAI. This is
 strictly additive: the original OpenAI workflow is unchanged. With only
 `OPENAI_API_KEY` set (or `--openai-api-key` passed), the tool behaves exactly as
 before, defaulting to the OpenAI provider and the `gpt-5.2` model.
@@ -114,7 +116,8 @@ Provider auto-detection (`--provider auto`, the default):
 
 - Only `OPENAI_API_KEY` set → OpenAI with `gpt-5.2`
 - Only `GEMINI_API_KEY`/`GOOGLE_API_KEY` set → Gemini with `gemini-flash-latest`
-- Both set → OpenAI (original behavior wins)
+- Only `ANTHROPIC_API_KEY` set → Anthropic with `claude-sonnet-latest`
+- Multiple set → OpenAI wins (original behavior)
 
 ```bash
 # Original OpenAI usage — unchanged
@@ -125,8 +128,12 @@ complexity-cli analyze-pr "https://github.com/owner/repo/pull/123"
 export GEMINI_API_KEY="your-key"
 complexity-cli analyze-pr "https://github.com/owner/repo/pull/123"
 
+# Anthropic Claude via auto-detection
+export ANTHROPIC_API_KEY="your-key"
+complexity-cli analyze-pr "https://github.com/owner/repo/pull/123"
+
 # Explicit provider selection
-complexity-cli analyze-pr "https://github.com/owner/repo/pull/123" --provider gemini
+complexity-cli analyze-pr "https://github.com/owner/repo/pull/123" --provider anthropic
 ```
 
 ### Examples
@@ -135,8 +142,12 @@ complexity-cli analyze-pr "https://github.com/owner/repo/pull/123" --provider ge
 # Analyze a PR with default settings
 complexity-cli analyze-pr "https://github.com/owner/repo/pull/123"
 
-# Use a different model
-complexity-cli analyze-pr "https://github.com/owner/repo/pull/123" --model gpt-4
+# Use Anthropic Claude provider
+export ANTHROPIC_API_KEY="your-key"
+complexity-cli analyze-pr "https://github.com/owner/repo/pull/123" --provider anthropic
+
+# Use a specific Anthropic model
+complexity-cli analyze-pr "https://github.com/owner/repo/pull/123" --provider anthropic --model claude-3-7-sonnet-latest
 
 # Output as markdown
 complexity-cli analyze-pr "https://github.com/owner/repo/pull/123" --format markdown

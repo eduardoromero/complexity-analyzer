@@ -37,6 +37,7 @@ class AnalysisConfig:
     github_token: Optional[str] = None
     openai_key: Optional[str] = None
     gemini_key: Optional[str] = None
+    anthropic_key: Optional[str] = None
 
     # Token rotation (optional)
     token_rotator: Optional["TokenRotator"] = None
@@ -56,10 +57,26 @@ class AnalysisConfig:
             raise ValueError(f"sleep_seconds cannot be negative, got {self.sleep_seconds}")
         if not self.model or not self.model.strip():
             raise ValueError("model cannot be empty")
-        if self.provider not in ("auto", "gemini", "openai"):
+        if self.provider not in ("auto", "gemini", "openai", "anthropic"):
             raise ValueError(
-                f"provider must be 'auto', 'gemini', or 'openai', got '{self.provider}'"
+                f"provider must be 'auto', 'gemini', 'openai', or 'anthropic', got '{self.provider}'"
             )
+
+    @classmethod
+    def from_env(cls, **kwargs) -> "AnalysisConfig":
+        """Create AnalysisConfig with defaults resolved from environment variables."""
+        from .config import (
+            get_anthropic_api_key,
+            get_gemini_api_key,
+            get_github_token,
+            get_openai_api_key,
+        )
+
+        kwargs.setdefault("github_token", get_github_token())
+        kwargs.setdefault("openai_key", get_openai_api_key())
+        kwargs.setdefault("gemini_key", get_gemini_api_key())
+        kwargs.setdefault("anthropic_key", get_anthropic_api_key())
+        return cls(**kwargs)
 
 
 @dataclass
