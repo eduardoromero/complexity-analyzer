@@ -78,6 +78,128 @@ class TestAnalyzePrCommand:
         assert "--timeout" in output
         assert "--dry-run" in output
         assert "--verbose" in output
+        assert "--provider" in output or "-p" in output
+        assert "--gemini-api-key" in output
+        assert "--openai-api-key" in output
+
+    @patch("cli.main.fetch_pr")
+    @patch("cli.main.get_provider")
+    def test_auto_detect_gemini_provider(self, mock_get_provider, mock_fetch):
+        """Test auto-detection selects gemini when GEMINI_API_KEY is present and no OPENAI_API_KEY."""
+        mock_fetch.return_value = (
+            "diff --git a/file.py b/file.py\n+line1",
+            {"title": "Test PR", "additions": 10, "deletions": 5, "files": [], "changed_files": 1},
+        )
+        mock_prov_instance = mock_get_provider.return_value
+        mock_prov_instance.analyze_complexity.return_value = {
+            "complexity": 5,
+            "explanation": "Medium",
+            "provider": "gemini",
+            "model": "gemini-flash-latest",
+        }
+
+        with patch.dict("os.environ", {"GEMINI_API_KEY": "gemini-secret"}, clear=True):
+            result = runner.invoke(app, ["analyze-pr", "https://github.com/owner/repo/pull/123"])
+            assert result.exit_code == 0
+            mock_get_provider.assert_called_once()
+            call_kwargs = mock_get_provider.call_args.kwargs
+            assert call_kwargs["provider"] == "gemini"
+            assert call_kwargs["api_key"] == "gemini-secret"
+            assert call_kwargs["model"] == "gemini-flash-latest"
+
+    @patch("cli.main.fetch_pr")
+    @patch("cli.main.get_provider")
+    def test_explicit_provider_option(self, mock_get_provider, mock_fetch):
+        """Test explicit --provider option is respected."""
+        mock_fetch.return_value = (
+            "diff --git a/file.py b/file.py\n+line1",
+            {"title": "Test PR", "additions": 10, "deletions": 5, "files": [], "changed_files": 1},
+        )
+        mock_prov_instance = mock_get_provider.return_value
+        mock_prov_instance.analyze_complexity.return_value = {
+            "complexity": 3,
+            "explanation": "Low",
+            "provider": "gemini",
+            "model": "gemini-flash-latest",
+        }
+
+        result = runner.invoke(
+            app,
+            [
+                "analyze-pr",
+                "https://github.com/owner/repo/pull/123",
+                "--provider",
+                "gemini",
+                "--gemini-api-key",
+                "test-gemini-key",
+            ],
+        )
+        assert result.exit_code == 0
+        mock_get_provider.assert_called_once()
+        call_kwargs = mock_get_provider.call_args.kwargs
+        assert call_kwargs["provider"] == "gemini"
+        assert call_kwargs["api_key"] == "test-gemini-key"
+
+    def test_invalid_provider_option(self):
+        """Test invalid --provider option raises clear error."""
+        result = runner.invoke(
+            app,
+            [
+                "analyze-pr",
+                "https://github.com/owner/repo/pull/123",
+                "--provider",
+                "anthropic",
+            ],
+        )
+        assert result.exit_code != 0
+        assert "Unsupported provider" in result.output or "Invalid provider" in result.output
+
+    @patch("cli.main.fetch_pr")
+    @patch("cli.main.get_provider")
+    def test_explicit_gemini_key_overrides_openai_env(self, mock_get_provider, mock_fetch):
+        """Test explicit --gemini-api-key on CLI takes precedence over ambient OPENAI_API_KEY env var."""
+        mock_fetch.return_value = (
+            "diff --git a/file.py b/file.py\n+line1",
+            {"title": "Test PR", "additions": 10, "deletions": 5, "files": [], "changed_files": 1},
+        )
+        mock_prov_instance = mock_get_provider.return_value
+        mock_prov_instance.analyze_complexity.return_value = {
+            "complexity": 4,
+            "explanation": "Medium",
+            "provider": "gemini",
+            "model": "gemini-flash-latest",
+        }
+
+        with patch.dict("os.environ", {"OPENAI_API_KEY": "sk-ambient-secret"}, clear=True):
+            result = runner.invoke(
+                app,
+                [
+                    "analyze-pr",
+                    "https://github.com/owner/repo/pull/123",
+                    "--gemini-api-key",
+                    "AIza-explicit-key",
+                ],
+            )
+            assert result.exit_code == 0
+            mock_get_provider.assert_called_once()
+            call_kwargs = mock_get_provider.call_args.kwargs
+            assert call_kwargs["provider"] == "gemini"
+            assert call_kwargs["api_key"] == "AIza-explicit-key"
+
+    def test_explicit_openai_provider_without_openai_key_fails_preflight(self):
+        """Test explicit --provider openai without OpenAI key fails pre-flight with clean error."""
+        with patch.dict("os.environ", {"GEMINI_API_KEY": "AIza-secret"}, clear=True):
+            result = runner.invoke(
+                app,
+                [
+                    "analyze-pr",
+                    "https://github.com/owner/repo/pull/123",
+                    "--provider",
+                    "openai",
+                ],
+            )
+            assert result.exit_code != 0
+            assert "OPENAI_API_KEY" in result.output
 
 
 class TestRateLimitCommand:
@@ -161,6 +283,32 @@ class TestBatchAnalyzeCommand:
         assert "--until" in output
         assert "--workers" in output
         assert "--label" in output
+
+    @patch("cli.main.resolve_provider_credentials")
+    @patch("cli.main.load_pr_urls_from_file")
+    @patch("cli.main.run_batch_analysis_with_labels")
+    def test_batch_analyze_gemini_provider(self, mock_batch, mock_urls, mock_resolve):
+        """Test batch-analyze with gemini provider and key."""
+        mock_urls.return_value = ["https://github.com/owner/repo/pull/1"]
+        result = runner.invoke(
+            app,
+            [
+                "batch-analyze",
+                "--input-file",
+                "prs.txt",
+                "--output",
+                "out.csv",
+                "--provider",
+                "gemini",
+                "--gemini-api-key",
+                "test-gemini-key",
+            ],
+        )
+        assert result.exit_code == 0
+        mock_resolve.assert_called_once()
+        call_kwargs = mock_resolve.call_args.kwargs
+        assert call_kwargs["provider"] == "gemini"
+        assert call_kwargs["gemini_api_key"] == "test-gemini-key"
 
 
 class TestLabelPrCommand:

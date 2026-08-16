@@ -1,6 +1,9 @@
-"""Tests for analyze module."""
+from unittest.mock import patch
 
-from cli.analyze import is_automated_sync_pr
+import pytest
+
+from cli.analyze import analyze_single_pr, is_automated_sync_pr
+from cli.config_types import AnalysisConfig
 
 SYNC_TITLE = "chore(cursor): [skip-ci] synced file(s) with lemonade-hq/cursor-rules"
 SYNC_BODY = (
@@ -47,3 +50,40 @@ def test_missing_signals():
 def test_synced_local_file_phrasing():
     title = "chore: synced local file(s) with org/upstream"
     assert is_automated_sync_pr(title, "github-actions[bot]") is True
+
+
+@patch("cli.analyze.fetch_pr")
+@patch("cli.analyze.get_provider")
+def test_analyze_single_pr_auto_detects_gemini(mock_get_provider, mock_fetch):
+    mock_fetch.return_value = (
+        "diff text",
+        {"title": "Test PR", "additions": 1, "deletions": 1},
+    )
+    mock_provider = mock_get_provider.return_value
+    mock_provider.analyze_complexity.return_value = {
+        "complexity": 4,
+        "explanation": "Simple",
+        "provider": "gemini",
+        "model": "gemini-flash-latest",
+    }
+
+    config = AnalysisConfig(gemini_key="gemini-key", provider="auto")
+    result = analyze_single_pr("https://github.com/owner/repo/pull/123", config)
+
+    assert result["score"] == 4
+    assert result["provider"] == "gemini"
+    mock_get_provider.assert_called_once_with(
+        provider="gemini",
+        api_key="gemini-key",
+        model="gemini-flash-latest",
+        timeout=config.timeout,
+    )
+
+
+def test_analyze_single_pr_missing_api_keys_raises_value_error():
+    config = AnalysisConfig(provider="auto")
+    with patch.dict("os.environ", {}, clear=True):
+        with patch("cli.analyze.get_gemini_api_key", return_value=None):
+            with patch("cli.analyze.get_openai_api_key", return_value=None):
+                with pytest.raises(ValueError, match="GEMINI_API_KEY or OPENAI_API_KEY"):
+                    analyze_single_pr("https://github.com/owner/repo/pull/123", config)
