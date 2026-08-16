@@ -115,6 +115,11 @@ class PydanticAIProvider(LLMProvider):
 
     # Backward compatibility
     @property
+    def provider(self) -> str:
+        """Return the provider name (backward compatible)."""
+        return self._provider_name
+
+    @property
     def model(self) -> str:
         """Return the model name (backward compatible)."""
         return self._model_name

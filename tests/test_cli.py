@@ -95,7 +95,7 @@ class TestAnalyzePrCommand:
             "complexity": 5,
             "explanation": "Medium",
             "provider": "gemini",
-            "model": "gemini-2.5-flash",
+            "model": "gemini-flash-latest",
         }
 
         with patch.dict("os.environ", {"GEMINI_API_KEY": "gemini-secret"}, clear=True):
@@ -105,7 +105,7 @@ class TestAnalyzePrCommand:
             call_kwargs = mock_get_provider.call_args.kwargs
             assert call_kwargs["provider"] == "gemini"
             assert call_kwargs["api_key"] == "gemini-secret"
-            assert call_kwargs["model"] == "gemini-2.5-flash"
+            assert call_kwargs["model"] == "gemini-flash-latest"
 
     @patch("cli.main.fetch_pr")
     @patch("cli.main.get_provider")
@@ -120,7 +120,7 @@ class TestAnalyzePrCommand:
             "complexity": 3,
             "explanation": "Low",
             "provider": "gemini",
-            "model": "gemini-2.5-flash",
+            "model": "gemini-flash-latest",
         }
 
         result = runner.invoke(
@@ -167,7 +167,7 @@ class TestAnalyzePrCommand:
             "complexity": 4,
             "explanation": "Medium",
             "provider": "gemini",
-            "model": "gemini-2.5-flash",
+            "model": "gemini-flash-latest",
         }
 
         with patch.dict("os.environ", {"OPENAI_API_KEY": "sk-ambient-secret"}, clear=True):

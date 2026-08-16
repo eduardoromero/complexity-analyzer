@@ -377,6 +377,15 @@ class TestAnalyzeComplexity:
                     title="Title",
                 )
 
+    def test_pydantic_ai_provider_properties(self):
+        """Test provider_name, provider, model_name, and model properties."""
+        test_model = TestModel()
+        provider = PydanticAIProvider(provider="gemini", model=test_model)
+        assert provider.provider_name == "gemini"
+        assert provider.provider == "gemini"
+        assert provider.model_name == test_model.model_name
+        assert provider.model == test_model.model_name
+
 
 class TestLLMError:
     """Tests for LLMError exception."""

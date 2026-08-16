@@ -254,7 +254,7 @@ def analyze_pr_to_dict(
     output = {
         "score": result["complexity"],
         "explanation": result["explanation"],
-        "provider": result.get("provider", provider_inst.provider),
+        "provider": result.get("provider", provider_inst.provider_name),
         "model": result.get("model", provider_inst.model_name),
         "tokens": result.get("tokens"),
         "timestamp": datetime.utcnow().isoformat() + "Z",

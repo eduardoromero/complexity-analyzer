@@ -240,7 +240,7 @@ def analyze_single_pr(
     return {
         "score": result["complexity"],
         "explanation": result["explanation"],
-        "provider": result.get("provider", provider_inst.provider),
+        "provider": result.get("provider", provider_inst.provider_name),
         "model": result.get("model", provider_inst.model_name),
         "tokens": result.get("tokens"),
         "timestamp": datetime.utcnow().isoformat() + "Z",
