@@ -197,9 +197,46 @@ class PydanticAIProvider(LLMProvider):
             result = self._agent.run_sync(user_prompt, instructions=prompt)
             output = result.output
             usage = result.usage()
-            tokens = usage.total_tokens
-            if not tokens and usage.details:
+            tokens = getattr(usage, "total_tokens", None)
+            if not isinstance(tokens, (int, float)) or tokens <= 0:
+                in_tok = getattr(usage, "input_tokens", None)
+                out_tok = getattr(usage, "output_tokens", None)
+                if (
+                    isinstance(in_tok, (int, float))
+                    and isinstance(out_tok, (int, float))
+                    and (in_tok + out_tok > 0)
+                ):
+                    tokens = in_tok + out_tok
+                elif isinstance(in_tok, (int, float)) and in_tok > 0:
+                    tokens = in_tok
+                elif isinstance(out_tok, (int, float)) and out_tok > 0:
+                    tokens = out_tok
+                else:
+                    tokens = None
+
+            if not tokens and getattr(usage, "details", None) and isinstance(usage.details, dict):
                 tokens = sum(v for v in usage.details.values() if isinstance(v, (int, float)))
+
+            if not tokens:
+                msg_tokens = 0
+                for msg in result.all_messages() if hasattr(result, "all_messages") else []:
+                    if hasattr(msg, "usage") and msg.usage:
+                        u = msg.usage
+                        t = getattr(u, "total_tokens", None)
+                        if not isinstance(t, (int, float)) or t <= 0:
+                            i_t = getattr(u, "input_tokens", 0)
+                            o_t = getattr(u, "output_tokens", 0)
+                            if isinstance(i_t, (int, float)) and isinstance(o_t, (int, float)):
+                                t = i_t + o_t
+                            else:
+                                t = 0
+                        if isinstance(t, (int, float)) and t > 0:
+                            msg_tokens += int(t)
+                if msg_tokens:
+                    tokens = msg_tokens
+
+            if not isinstance(tokens, (int, float)) or tokens <= 0:
+                tokens = None
 
             return {
                 "complexity": output.complexity,

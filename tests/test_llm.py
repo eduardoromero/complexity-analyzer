@@ -822,3 +822,42 @@ class TestProviderRegistry:
         assert prov == "openai"
         assert key == "sk-env"
         assert model == "gpt-5.2"
+
+    def test_tokens_zero_normalized_to_none(self):
+        """When total_tokens evaluates to 0, it is normalized to None."""
+        provider = OpenAIProvider("test-key")
+        mock_result = MagicMock()
+        mock_result.output = ComplexityResult(complexity=5, explanation="OK")
+        mock_usage = MagicMock()
+        mock_usage.total_tokens = 0
+        mock_usage.input_tokens = 0
+        mock_usage.output_tokens = 0
+        mock_usage.details = {}
+        mock_result.usage.return_value = mock_usage
+        mock_result.all_messages.return_value = []
+
+        with patch.object(provider._agent, "run_sync", return_value=mock_result):
+            res = provider.analyze_complexity("prompt", "diff", "{}", "title")
+            assert res["tokens"] is None
+
+    def test_tokens_extracted_from_message_history(self):
+        """When top-level usage has 0 tokens, tokens are extracted from message history."""
+        provider = OpenAIProvider("test-key")
+        mock_result = MagicMock()
+        mock_result.output = ComplexityResult(complexity=5, explanation="OK")
+        mock_usage = MagicMock()
+        mock_usage.total_tokens = 0
+        mock_usage.input_tokens = 0
+        mock_usage.output_tokens = 0
+        mock_usage.details = {}
+        mock_result.usage.return_value = mock_usage
+
+        mock_msg = MagicMock()
+        mock_msg_usage = MagicMock()
+        mock_msg_usage.total_tokens = 450
+        mock_msg.usage = mock_msg_usage
+        mock_result.all_messages.return_value = [mock_msg]
+
+        with patch.object(provider._agent, "run_sync", return_value=mock_result):
+            res = provider.analyze_complexity("prompt", "diff", "{}", "title")
+            assert res["tokens"] == 450
