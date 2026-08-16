@@ -5,6 +5,12 @@ import pytest
 from openai.types.chat import ChatCompletion, ChatCompletionMessage
 from openai.types.chat.chat_completion import Choice
 from openai.types.completion_usage import CompletionTokensDetails, CompletionUsage
+from openai.types.responses import Response
+from openai.types.responses.response_usage import (
+    InputTokensDetails,
+    OutputTokensDetails,
+    ResponseUsage,
+)
 from pydantic import ValidationError
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
 from pydantic_ai.models.anthropic import AnthropicModel
@@ -23,6 +29,7 @@ from cli.llm import (
     LLMError,
     OpenAIProvider,
     PydanticAIProvider,
+    _uses_openai_responses_api,
     get_provider,
     get_provider_spec,
     resolve_provider,
@@ -129,10 +136,37 @@ class TestOpenAIProviderBase:
         assert provider._model_instance.model_name == "gpt-4o"
 
     def test_luna_model_uses_responses_api(self):
-        """Test Luna models use the Responses API required for structured output."""
+        """Test Luna models route to the Responses API (Luna rejects function
+        tools on Chat Completions but accepts them on Responses)."""
         provider = OpenAIProvider("test-key", model="gpt-5.6-luna")
         assert isinstance(provider._model_instance, OpenAIResponsesModel)
         assert provider._model_instance.model_name == "gpt-5.6-luna"
+
+    def test_luna_dated_snapshot_uses_responses_api(self):
+        """Test dated Luna snapshots also route to the Responses API."""
+        provider = OpenAIProvider("test-key", model="gpt-5.6-luna-2026-07-15")
+        assert isinstance(provider._model_instance, OpenAIResponsesModel)
+
+    def test_luna_prefixed_model_uses_responses_api(self):
+        """Test routing runs on the prefix-stripped model name."""
+        provider = OpenAIProvider("test-key", model="openai:gpt-5.6-luna")
+        assert isinstance(provider._model_instance, OpenAIResponsesModel)
+        assert provider._model_instance.model_name == "gpt-5.6-luna"
+
+    @pytest.mark.parametrize(
+        "model_name,expected",
+        [
+            ("gpt-5.6-luna", True),
+            ("gpt-5.6-luna-2026-07-15", True),
+            ("GPT-5.6-LUNA", True),
+            ("gpt-5.2", False),
+            ("gpt-4o", False),
+            ("luna", False),
+        ],
+    )
+    def test_uses_openai_responses_api_matcher(self, model_name, expected):
+        """Test the Responses API matcher against name variants."""
+        assert _uses_openai_responses_api(model_name) is expected
 
     def test_api_key_forwarded_to_client(self):
         """Test the API key reaches the underlying AsyncOpenAI client."""
@@ -812,6 +846,44 @@ class TestAnalyzeComplexity:
         assert result.total_tokens == 1498
         assert result.input_tokens == 1450
         assert result.output_tokens == 48
+
+    def test_openai_responses_usage_extracts_tokens(self):
+        """Test RequestUsage.extract recovers Responses API token counts.
+
+        The Responses API usage shape (input_tokens/output_tokens) hits the same
+        genai-prices failure as chat completions for models it doesn't know, so
+        Luna token reporting depends on the patched extract's fallback reading
+        those keys (regression test for the Responses flavor)."""
+        usage = ResponseUsage(
+            input_tokens=1200,
+            output_tokens=345,
+            total_tokens=1545,
+            input_tokens_details=InputTokensDetails(cached_tokens=0),
+            output_tokens_details=OutputTokensDetails(reasoning_tokens=128),
+        )
+        response = Response(
+            id="resp-test",
+            created_at=0,
+            model="gpt-5.6-luna",
+            object="response",
+            output=[],
+            parallel_tool_calls=False,
+            tool_choice="auto",
+            tools=[],
+            usage=usage,
+        )
+
+        result = _map_usage(
+            response,
+            provider="openai",
+            provider_url="https://api.openai.com/v1",
+            model="gpt-5.6-luna",
+        )
+
+        assert result.total_tokens == 1545
+        assert result.input_tokens == 1200
+        assert result.output_tokens == 345
+        assert result.details["reasoning_tokens"] == 128
 
     def test_analyze_complexity_returns_openai_token_count(self):
         """Test analyze_complexity surfaces the real OpenAI token count instead of 0."""

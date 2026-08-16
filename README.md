@@ -85,7 +85,11 @@ complexity-cli analyze-pr "https://github.com/owner/repo/pull/123"
 
 - `--provider`: LLM provider: `openai`, `gemini`, `anthropic`, or `auto` (default: `auto`)
 - `--prompt-file`, `-p`: Path to custom prompt file (default: embedded prompt)
-- `--model`, `-m`: Model name (default: `gpt-5.2` for OpenAI, `gemini-flash-latest` for Gemini, `claude-sonnet-4-5` for Anthropic)
+- `--model`, `-m`: Model name (default: `gpt-5.2` for OpenAI, `gemini-flash-latest` for Gemini, `claude-sonnet-4-5` for Anthropic).
+  OpenAI models with `-luna` in the name are sent to the OpenAI Responses API (`/v1/responses`)
+  instead of Chat Completions, since Luna rejects function tools on Chat Completions. Note that
+  most OpenAI-compatible proxies used via `--api-base-url` do not serve `/v1/responses`, so
+  `-luna` model names are best used against the official OpenAI API.
 - `--openai-api-key`: OpenAI API key (overrides `OPENAI_API_KEY`)
 - `--gemini-api-key`: Gemini / Google AI Studio API key (overrides `GEMINI_API_KEY`)
 - `--anthropic-api-key`: Anthropic API key (overrides `ANTHROPIC_API_KEY`)

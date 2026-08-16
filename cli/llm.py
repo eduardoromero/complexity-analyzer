@@ -79,8 +79,14 @@ def _strip_prefix(name: str, prefixes: tuple[str, ...]) -> str:
 
 
 def _uses_openai_responses_api(model_name: str) -> bool:
-    """Return whether an OpenAI model requires the Responses API."""
-    return model_name.endswith("-luna")
+    """Return whether an OpenAI model must be routed to the Responses API.
+
+    Luna models reject function tools on the Chat Completions API but accept
+    them on the Responses API; structured output still travels as a function
+    tool either way. Substring match so dated snapshots
+    (e.g. ``gpt-5.6-luna-2026-07-15``) route correctly.
+    """
+    return "-luna" in model_name.lower()
 
 
 class LLMError(Exception):
