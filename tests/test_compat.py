@@ -180,6 +180,88 @@ class TestLegacyCliInvocation:
         assert call_kwargs["provider"] == "openai"
         assert call_kwargs["model"] == DEFAULT_MODEL
 
+    @patch("cli.main.fetch_pr")
+    @patch("cli.main.get_provider")
+    def test_all_three_env_keys_present_resolves_to_openai(self, mock_get_provider, mock_fetch):
+        """When OPENAI_API_KEY, GEMINI_API_KEY, and ANTHROPIC_API_KEY are set, CLI resolves to OpenAI."""
+        mock_fetch.return_value = (FAKE_DIFF, FAKE_META)
+        mock_get_provider.return_value.analyze_complexity.return_value = FAKE_LLM_RESULT
+
+        env = {
+            "OPENAI_API_KEY": "openai-key",
+            "GEMINI_API_KEY": "gemini-key",
+            "ANTHROPIC_API_KEY": "anthropic-key",
+        }
+        with patch.dict("os.environ", env, clear=True):
+            result = runner.invoke(app, ["analyze-pr", TEST_PR_URL])
+
+        assert result.exit_code == 0
+        call_kwargs = mock_get_provider.call_args.kwargs
+        assert call_kwargs["provider"] == "openai"
+        assert call_kwargs["model"] == DEFAULT_MODEL
+
+    @patch("cli.main.fetch_pr")
+    @patch("cli.main.get_provider")
+    def test_openai_and_anthropic_keys_present_resolves_to_openai(
+        self, mock_get_provider, mock_fetch
+    ):
+        """When OPENAI_API_KEY and ANTHROPIC_API_KEY are set, CLI resolves to OpenAI."""
+        mock_fetch.return_value = (FAKE_DIFF, FAKE_META)
+        mock_get_provider.return_value.analyze_complexity.return_value = FAKE_LLM_RESULT
+
+        env = {"OPENAI_API_KEY": "openai-key", "ANTHROPIC_API_KEY": "anthropic-key"}
+        with patch.dict("os.environ", env, clear=True):
+            result = runner.invoke(app, ["analyze-pr", TEST_PR_URL])
+
+        assert result.exit_code == 0
+        call_kwargs = mock_get_provider.call_args.kwargs
+        assert call_kwargs["provider"] == "openai"
+        assert call_kwargs["model"] == DEFAULT_MODEL
+
+    @patch("cli.main.fetch_pr")
+    @patch("cli.main.get_provider")
+    def test_gemini_and_anthropic_keys_present_resolves_to_gemini(
+        self, mock_get_provider, mock_fetch
+    ):
+        """When GEMINI_API_KEY and ANTHROPIC_API_KEY are set, CLI resolves to Gemini."""
+        mock_fetch.return_value = (FAKE_DIFF, FAKE_META)
+        mock_get_provider.return_value.analyze_complexity.return_value = {
+            **FAKE_LLM_RESULT,
+            "provider": "gemini",
+            "model": DEFAULT_GEMINI_MODEL,
+        }
+
+        env = {"GEMINI_API_KEY": "gemini-key", "ANTHROPIC_API_KEY": "anthropic-key"}
+        with patch.dict("os.environ", env, clear=True):
+            result = runner.invoke(app, ["analyze-pr", TEST_PR_URL])
+
+        assert result.exit_code == 0
+        call_kwargs = mock_get_provider.call_args.kwargs
+        assert call_kwargs["provider"] == "gemini"
+        assert call_kwargs["model"] == DEFAULT_GEMINI_MODEL
+
+    @patch("cli.main.fetch_pr")
+    @patch("cli.main.get_provider")
+    def test_anthropic_key_only_resolves_to_anthropic(self, mock_get_provider, mock_fetch):
+        """When ONLY ANTHROPIC_API_KEY is set, CLI resolves to Anthropic (claude-3-7-sonnet-latest)."""
+        from cli.constants import DEFAULT_ANTHROPIC_MODEL
+
+        mock_fetch.return_value = (FAKE_DIFF, FAKE_META)
+        mock_get_provider.return_value.analyze_complexity.return_value = {
+            **FAKE_LLM_RESULT,
+            "provider": "anthropic",
+            "model": DEFAULT_ANTHROPIC_MODEL,
+        }
+
+        env = {"ANTHROPIC_API_KEY": "anthropic-key"}
+        with patch.dict("os.environ", env, clear=True):
+            result = runner.invoke(app, ["analyze-pr", TEST_PR_URL])
+
+        assert result.exit_code == 0
+        call_kwargs = mock_get_provider.call_args.kwargs
+        assert call_kwargs["provider"] == "anthropic"
+        assert call_kwargs["model"] == DEFAULT_ANTHROPIC_MODEL
+
 
 class TestActionCompat:
     """GitHub Action interface: legacy input keys and default-value resolution."""

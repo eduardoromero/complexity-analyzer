@@ -169,7 +169,7 @@ class TestAnalyzePrCommand:
             "complexity": 7,
             "explanation": "High",
             "provider": "anthropic",
-            "model": "claude-sonnet-latest",
+            "model": "claude-3-7-sonnet-latest",
         }
 
         result = runner.invoke(
@@ -526,6 +526,25 @@ class TestResolveProviderCredentials:
         """ANTHROPIC_API_KEY alone resolves to the Anthropic provider."""
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-env")
         assert resolve_provider_credentials("auto") == ("anthropic", "sk-ant-env")
+
+    def test_auto_selects_openai_when_all_three_keys_present(self, monkeypatch):
+        """When all three API keys are set in environment, OpenAI takes precedence."""
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-env")
+        monkeypatch.setenv("GEMINI_API_KEY", "AIza-env")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-env")
+        assert resolve_provider_credentials("auto") == ("openai", "sk-env")
+
+    def test_auto_selects_openai_when_openai_and_anthropic_keys_present(self, monkeypatch):
+        """When OPENAI_API_KEY and ANTHROPIC_API_KEY are set, OpenAI takes precedence."""
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-env")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-env")
+        assert resolve_provider_credentials("auto") == ("openai", "sk-env")
+
+    def test_auto_selects_gemini_when_gemini_and_anthropic_keys_present(self, monkeypatch):
+        """When GEMINI_API_KEY and ANTHROPIC_API_KEY are set, Gemini takes precedence."""
+        monkeypatch.setenv("GEMINI_API_KEY", "AIza-env")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-env")
+        assert resolve_provider_credentials("auto") == ("gemini", "AIza-env")
 
     def test_auto_without_any_key_raises(self):
         """No credentials at all is a ValueError naming env vars."""

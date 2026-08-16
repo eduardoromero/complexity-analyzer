@@ -85,7 +85,7 @@ complexity-cli analyze-pr "https://github.com/owner/repo/pull/123"
 
 - `--provider`: LLM provider: `openai`, `gemini`, `anthropic`, or `auto` (default: `auto`)
 - `--prompt-file`, `-p`: Path to custom prompt file (default: embedded prompt)
-- `--model`, `-m`: Model name (default: `gpt-5.2` for OpenAI, `gemini-flash-latest` for Gemini, `claude-sonnet-latest` for Anthropic)
+- `--model`, `-m`: Model name (default: `gpt-5.2` for OpenAI, `gemini-flash-latest` for Gemini, `claude-3-7-sonnet-latest` for Anthropic)
 - `--openai-api-key`: OpenAI API key (overrides `OPENAI_API_KEY`)
 - `--gemini-api-key`: Gemini / Google AI Studio API key (overrides `GEMINI_API_KEY`)
 - `--anthropic-api-key`: Anthropic API key (overrides `ANTHROPIC_API_KEY`)
@@ -116,7 +116,7 @@ Provider auto-detection (`--provider auto`, the default):
 
 - Only `OPENAI_API_KEY` set → OpenAI with `gpt-5.2`
 - Only `GEMINI_API_KEY`/`GOOGLE_API_KEY` set → Gemini with `gemini-flash-latest`
-- Only `ANTHROPIC_API_KEY` set → Anthropic with `claude-sonnet-latest`
+- Only `ANTHROPIC_API_KEY` set → Anthropic with `claude-3-7-sonnet-latest`
 - Multiple set → OpenAI wins (original behavior)
 
 ```bash

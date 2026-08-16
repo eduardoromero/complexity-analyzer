@@ -13,12 +13,16 @@ from pydantic_ai.models.test import TestModel
 from cli.config import get_anthropic_api_key, get_anthropic_base_url
 from cli.constants import DEFAULT_ANTHROPIC_MODEL, DEFAULT_GEMINI_MODEL, DEFAULT_MODEL
 from cli.llm import (
+    DEFAULT_PROVIDER_PRECEDENCE,
+    PROVIDER_SPECS,
     AnthropicProvider,
     GeminiProvider,
     LLMError,
     OpenAIProvider,
     PydanticAIProvider,
     get_provider,
+    get_provider_spec,
+    resolve_provider,
 )
 
 from cli.llm_base import LLMProvider
@@ -262,8 +266,8 @@ class TestAnthropicProviderBase:
 
     def test_model_backward_compat(self):
         """Test model property for backward compatibility."""
-        provider = AnthropicProvider("test-key", model="claude-sonnet-latest")
-        assert provider.model == "claude-sonnet-latest"
+        provider = AnthropicProvider("test-key", model="claude-3-7-sonnet-latest")
+        assert provider.model == "claude-3-7-sonnet-latest"
 
     def test_default_model(self):
         """Test default model is set correctly."""
@@ -280,9 +284,9 @@ class TestAnthropicProviderBase:
 
     def test_builds_anthropic_model(self):
         """Test Anthropic initialization builds a PydanticAI AnthropicModel."""
-        provider = AnthropicProvider("test-key", model="claude-sonnet-latest")
+        provider = AnthropicProvider("test-key", model="claude-3-7-sonnet-latest")
         assert isinstance(provider._model_instance, AnthropicModel)
-        assert provider._model_instance.model_name == "claude-sonnet-latest"
+        assert provider._model_instance.model_name == "claude-3-7-sonnet-latest"
 
     def test_api_key_read_from_environment(self):
         """Test the Anthropic key is resolved from the environment when not passed."""
@@ -776,3 +780,84 @@ class TestLLMError:
     def test_llm_error_is_exception(self):
         """Test LLMError is an Exception."""
         assert issubclass(LLMError, Exception)
+
+
+class TestProviderRegistry:
+    """Tests for ProviderSpec registry and unified resolution."""
+
+    def test_default_provider_precedence(self):
+        """DEFAULT_PROVIDER_PRECEDENCE must strictly be ("openai", "gemini", "anthropic")."""
+        assert DEFAULT_PROVIDER_PRECEDENCE == ("openai", "gemini", "anthropic")
+
+    def test_provider_specs_registry(self):
+        """PROVIDER_SPECS registry contains openai, gemini, and anthropic specifications."""
+        assert "openai" in PROVIDER_SPECS
+        assert "gemini" in PROVIDER_SPECS
+        assert "anthropic" in PROVIDER_SPECS
+
+        assert PROVIDER_SPECS["openai"].default_model == DEFAULT_MODEL
+        assert PROVIDER_SPECS["gemini"].default_model == DEFAULT_GEMINI_MODEL
+        assert PROVIDER_SPECS["anthropic"].default_model == DEFAULT_ANTHROPIC_MODEL
+
+    def test_get_provider_spec_aliases(self):
+        """get_provider_spec resolves canonical names and aliases."""
+        assert get_provider_spec("openai").name == "openai"
+        assert get_provider_spec("openai-chat").name == "openai"
+        assert get_provider_spec("gemini").name == "gemini"
+        assert get_provider_spec("google").name == "gemini"
+        assert get_provider_spec("anthropic").name == "anthropic"
+        assert get_provider_spec("claude").name == "anthropic"
+        assert get_provider_spec("unknown") is None
+
+    def test_resolve_provider_models(self, monkeypatch):
+        """resolve_provider returns effective (provider, key, model) for auto and explicit models."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-env")
+        prov, key, model = resolve_provider("auto")
+        assert prov == "anthropic"
+        assert key == "sk-ant-env"
+        assert model == "claude-3-7-sonnet-latest"
+
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-env")
+        prov, key, model = resolve_provider("auto")
+        assert prov == "openai"
+        assert key == "sk-env"
+        assert model == "gpt-5.2"
+
+    def test_tokens_zero_normalized_to_none(self):
+        """When total_tokens evaluates to 0, it is normalized to None."""
+        provider = OpenAIProvider("test-key")
+        mock_result = MagicMock()
+        mock_result.output = ComplexityResult(complexity=5, explanation="OK")
+        mock_usage = MagicMock()
+        mock_usage.total_tokens = 0
+        mock_usage.input_tokens = 0
+        mock_usage.output_tokens = 0
+        mock_usage.details = {}
+        mock_result.usage.return_value = mock_usage
+        mock_result.all_messages.return_value = []
+
+        with patch.object(provider._agent, "run_sync", return_value=mock_result):
+            res = provider.analyze_complexity("prompt", "diff", "{}", "title")
+            assert res["tokens"] is None
+
+    def test_tokens_extracted_from_message_history(self):
+        """When top-level usage has 0 tokens, tokens are extracted from message history."""
+        provider = OpenAIProvider("test-key")
+        mock_result = MagicMock()
+        mock_result.output = ComplexityResult(complexity=5, explanation="OK")
+        mock_usage = MagicMock()
+        mock_usage.total_tokens = 0
+        mock_usage.input_tokens = 0
+        mock_usage.output_tokens = 0
+        mock_usage.details = {}
+        mock_result.usage.return_value = mock_usage
+
+        mock_msg = MagicMock()
+        mock_msg_usage = MagicMock()
+        mock_msg_usage.total_tokens = 450
+        mock_msg.usage = mock_msg_usage
+        mock_result.all_messages.return_value = [mock_msg]
+
+        with patch.object(provider._agent, "run_sync", return_value=mock_result):
+            res = provider.analyze_complexity("prompt", "diff", "{}", "title")
+            assert res["tokens"] == 450

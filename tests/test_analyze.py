@@ -87,9 +87,9 @@ def test_analyze_single_pr_auto_detects_gemini(mock_get_provider, mock_fetch):
 def test_analyze_single_pr_missing_api_keys_raises_value_error():
     config = AnalysisConfig(provider="auto")
     with patch.dict("os.environ", {}, clear=True):
-        with patch("cli.analyze.get_gemini_api_key", return_value=None):
-            with patch("cli.analyze.get_openai_api_key", return_value=None):
-                with patch("cli.analyze.get_anthropic_api_key", return_value=None):
+        with patch("cli.config.get_gemini_api_key", return_value=None):
+            with patch("cli.config.get_openai_api_key", return_value=None):
+                with patch("cli.config.get_anthropic_api_key", return_value=None):
                     with pytest.raises(ValueError, match="ANTHROPIC_API_KEY"):
                         analyze_single_pr(PR_URL, config)
 
@@ -199,6 +199,46 @@ class TestProviderAutoDetection:
         assert kwargs["provider"] == "anthropic"
         assert kwargs["api_key"] == "sk-ant-explicit"
         assert kwargs["model"] == DEFAULT_ANTHROPIC_MODEL
+
+    def test_auto_detects_openai_when_all_three_keys_set(self, analyze_mocks, monkeypatch):
+        """When all three keys are present in env, auto-detection resolves to openai (gpt-5.2)."""
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-env-key")
+        monkeypatch.setenv("GEMINI_API_KEY", "AIza-env-key")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-env-key")
+
+        analyze_single_pr(PR_URL, AnalysisConfig(provider="auto"))
+
+        kwargs = analyze_mocks.call_args.kwargs
+        assert kwargs["provider"] == "openai"
+        assert kwargs["api_key"] == "sk-env-key"
+        assert kwargs["model"] == DEFAULT_MODEL
+
+    def test_auto_detects_openai_when_openai_and_anthropic_keys_set(
+        self, analyze_mocks, monkeypatch
+    ):
+        """When OPENAI_API_KEY and ANTHROPIC_API_KEY are present, auto-detection resolves to openai."""
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-env-key")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-env-key")
+
+        analyze_single_pr(PR_URL, AnalysisConfig(provider="auto"))
+
+        kwargs = analyze_mocks.call_args.kwargs
+        assert kwargs["provider"] == "openai"
+        assert kwargs["api_key"] == "sk-env-key"
+
+    def test_auto_detects_gemini_when_gemini_and_anthropic_keys_set(
+        self, analyze_mocks, monkeypatch
+    ):
+        """When GEMINI_API_KEY and ANTHROPIC_API_KEY are present, auto-detection resolves to gemini."""
+        monkeypatch.setenv("GEMINI_API_KEY", "AIza-env-key")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-env-key")
+
+        analyze_single_pr(PR_URL, AnalysisConfig(provider="auto"))
+
+        kwargs = analyze_mocks.call_args.kwargs
+        assert kwargs["provider"] == "gemini"
+        assert kwargs["api_key"] == "AIza-env-key"
+        assert kwargs["model"] == DEFAULT_GEMINI_MODEL
 
 
 class TestExplicitProviderSelection:

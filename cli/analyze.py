@@ -7,17 +7,13 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
 from .config import (
-    get_anthropic_api_key,
-    get_gemini_api_key,
-    get_openai_api_key,
     validate_owner_repo,
     validate_pr_number,
 )
 from .config_types import AnalysisConfig
-from .constants import DEFAULT_ANTHROPIC_MODEL, DEFAULT_GEMINI_MODEL, DEFAULT_MODEL
 from .github import fetch_pr, fetch_pr_with_rotation
 from .io_safety import read_text_file
-from .llm import get_provider
+from .llm import get_provider, resolve_provider
 from .preprocess import make_prompt_input, process_diff
 from .utils import parse_pr_url
 
@@ -117,68 +113,12 @@ def analyze_single_pr(
         LLMError: If LLM call fails
         InvalidResponseError: If LLM response is invalid
     """
-    prov_norm = (config.provider or "auto").lower().strip()
-    gemini_key = config.gemini_key or get_gemini_api_key()
-    openai_key = config.openai_key or get_openai_api_key()
-    anthropic_key = config.anthropic_key or get_anthropic_api_key()
-
-    if prov_norm == "auto":
-        if config.anthropic_key and not config.openai_key and not config.gemini_key:
-            effective_prov = "anthropic"
-            effective_key = config.anthropic_key
-        elif config.gemini_key and not config.openai_key and not config.anthropic_key:
-            effective_prov = "gemini"
-            effective_key = config.gemini_key
-        elif config.openai_key and not config.gemini_key and not config.anthropic_key:
-            effective_prov = "openai"
-            effective_key = config.openai_key
-        elif anthropic_key and not openai_key and not gemini_key:
-            effective_prov = "anthropic"
-            effective_key = anthropic_key
-        elif gemini_key and not openai_key and not anthropic_key:
-            effective_prov = "gemini"
-            effective_key = gemini_key
-        else:
-            effective_prov = "openai"
-            effective_key = openai_key
-    elif prov_norm in ("anthropic", "claude"):
-        effective_prov = "anthropic"
-        effective_key = anthropic_key
-        if not effective_key:
-            raise ValueError("ANTHROPIC_API_KEY environment variable or argument is required")
-    elif prov_norm in ("gemini", "google"):
-        effective_prov = "gemini"
-        effective_key = gemini_key
-        if not effective_key:
-            raise ValueError(
-                "GEMINI_API_KEY or GOOGLE_API_KEY environment variable or argument is required"
-            )
-    elif prov_norm in ("openai", "openai-chat"):
-        effective_prov = "openai"
-        effective_key = openai_key
-        if not effective_key:
-            raise ValueError("OPENAI_API_KEY environment variable or argument is required")
-    else:
-        effective_prov = prov_norm
-        effective_key = openai_key or gemini_key or anthropic_key
-
-    if prov_norm == "auto" and not gemini_key and not openai_key and not anthropic_key:
-        raise ValueError("Either GEMINI_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY is required")
-
-    effective_model = (
-        DEFAULT_GEMINI_MODEL
-        if (
-            effective_prov in ("gemini", "google")
-            and (not config.model or config.model == DEFAULT_MODEL or config.model == "")
-        )
-        else (
-            DEFAULT_ANTHROPIC_MODEL
-            if (
-                effective_prov in ("anthropic", "claude")
-                and (not config.model or config.model == DEFAULT_MODEL or config.model == "")
-            )
-            else (config.model or DEFAULT_MODEL)
-        )
+    effective_prov, effective_key, effective_model = resolve_provider(
+        provider=config.provider,
+        openai_api_key=config.openai_key,
+        gemini_api_key=config.gemini_key,
+        anthropic_api_key=config.anthropic_key,
+        model=config.model,
     )
 
     # Delegate provider/model/key resolution directly to llm.get_provider factory
