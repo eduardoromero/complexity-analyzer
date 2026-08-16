@@ -16,6 +16,7 @@ from .constants import (
     DEFAULT_GEMINI_MODEL,
     DEFAULT_MAX_RETRIES,
     DEFAULT_MODEL,
+    DEFAULT_RETRY_DELAY,
     DEFAULT_TIMEOUT,
 )
 from .llm_base import LLMProvider
@@ -61,6 +62,7 @@ class PydanticAIProvider(LLMProvider):
             retries: Number of schema validation retries handled natively by PydanticAI
         """
         self._provider_name = provider.lower().strip()
+        self.timeout = timeout
 
         if self._provider_name not in ("openai", "openai-chat", "gemini", "google"):
             raise LLMError(f"Unsupported provider: '{provider}'")
@@ -130,6 +132,8 @@ class PydanticAIProvider(LLMProvider):
         diff_excerpt: str,
         stats_json: str,
         title: str,
+        max_retries: int = DEFAULT_MAX_RETRIES,
+        retry_delay: float = DEFAULT_RETRY_DELAY,
     ) -> Dict[str, Any]:
         """
         Analyze PR complexity using PydanticAI and return score with explanation.
@@ -139,6 +143,10 @@ class PydanticAIProvider(LLMProvider):
             diff_excerpt: Formatted diff excerpt
             stats_json: JSON string with stats
             title: PR title
+            max_retries: Accepted for backward compatibility with the original
+                OpenAIProvider signature; retries are configured via the
+                ``retries`` constructor argument and handled natively by PydanticAI.
+            retry_delay: Accepted for backward compatibility; unused (see max_retries).
 
         Returns:
             Dict with 'complexity' (int 1..10), 'explanation' (str),
