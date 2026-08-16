@@ -13,6 +13,7 @@ from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.anthropic import AnthropicProvider as PydanticAnthropicProvider
 from pydantic_ai.providers.google import GoogleProvider
 from pydantic_ai.providers.openai import OpenAIProvider as PydanticOpenAIProvider
+from pydantic_ai.usage import RequestUsage
 
 from .config import (
     get_anthropic_api_key,
@@ -35,6 +36,38 @@ from .scoring import ComplexityResult
 _GEMINI_PREFIXES = ("gemini:", "google-gla:", "google-vertex:", "google:")
 _OPENAI_PREFIXES = ("openai:", "openai-chat:")
 _ANTHROPIC_PREFIXES = ("anthropic:", "claude:")
+
+# PydanticAI's `RequestUsage.extract` delegates to genai-prices, which for OpenAI
+# chat completions can return an `output_reasoning_tokens` field that isn't a
+# valid `RequestUsage` constructor argument (RequestUsage has no such field).
+# That raises a TypeError that `extract` swallows via a blanket `except Exception`,
+# silently collapsing token usage to 0. Wrap `extract` to recover the real
+# prompt/completion token counts straight from the raw response dict when this
+# happens, so OpenAI token usage isn't reported as 0.
+_orig_request_usage_extract = RequestUsage.extract
+
+
+@classmethod
+def _safe_request_usage_extract(cls, data: Any, *args, **kwargs) -> RequestUsage:
+    res = _orig_request_usage_extract(data, *args, **kwargs)
+    if res.total_tokens == 0 and isinstance(data, dict):
+        usage_dict = data.get("usage")
+        if isinstance(usage_dict, dict):
+            prompt_tokens = usage_dict.get("prompt_tokens") or usage_dict.get("input_tokens")
+            completion_tokens = usage_dict.get("completion_tokens") or usage_dict.get(
+                "output_tokens"
+            )
+            if isinstance(prompt_tokens, int) and isinstance(completion_tokens, int):
+                details = kwargs.get("details") or {}
+                return cls(
+                    input_tokens=prompt_tokens,
+                    output_tokens=completion_tokens,
+                    details=details,
+                )
+    return res
+
+
+RequestUsage.extract = _safe_request_usage_extract
 
 
 def _strip_prefix(name: str, prefixes: tuple[str, ...]) -> str:
