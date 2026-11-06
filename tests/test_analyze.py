@@ -68,7 +68,7 @@ def test_analyze_single_pr_auto_detects_gemini(mock_get_provider, mock_fetch):
         "complexity": 4,
         "explanation": "Simple",
         "provider": "gemini",
-        "model": "gemini-flash-latest",
+        "model": "gemini-3.8-flash",
     }
 
     config = AnalysisConfig(gemini_key="gemini-key", provider="auto")
@@ -79,7 +79,7 @@ def test_analyze_single_pr_auto_detects_gemini(mock_get_provider, mock_fetch):
     mock_get_provider.assert_called_once_with(
         provider="gemini",
         api_key="gemini-key",
-        model="gemini-flash-latest",
+        model="gemini-3.8-flash",
         timeout=config.timeout,
     )
 
