@@ -85,7 +85,7 @@ complexity-cli analyze-pr "https://github.com/owner/repo/pull/123"
 
 - `--provider`: LLM provider: `openai`, `gemini`, `anthropic`, or `auto` (default: `auto`)
 - `--prompt-file`, `-p`: Path to custom prompt file (default: embedded prompt)
-- `--model`, `-m`: Model name (default: `gpt-5.2` for OpenAI, `gemini-3.8-flash` for Gemini, `claude-sonnet-4-5` for Anthropic).
+- `--model`, `-m`: Model name (default: `gpt-5.2` for OpenAI, `gemini-3.8-flash` for Gemini, `claude-sonnet-5-5` for Anthropic).
   The tool sends OpenAI models with `-luna` in the name to the Responses API (`/v1/responses`),
   because Luna rejects function tools on the Chat Completions API. Most OpenAI-compatible
   proxies do not serve `/v1/responses`. If you point `--api-base-url` at a proxy, do not use
@@ -119,7 +119,7 @@ Provider auto-detection (`--provider auto`, the default) applies these rules:
 
 - If only `OPENAI_API_KEY` is set, the tool uses OpenAI with `gpt-5.2`.
 - If only `GEMINI_API_KEY` or `GOOGLE_API_KEY` is set, the tool uses Gemini with `gemini-3.8-flash`.
-- If only `ANTHROPIC_API_KEY` is set, the tool uses Anthropic with `claude-sonnet-4-5`.
+- If only `ANTHROPIC_API_KEY` is set, the tool uses Anthropic with `claude-sonnet-5-5`.
 - If more than one key is set, the tool uses OpenAI. This is the original behavior.
 
 ```bash
@@ -150,7 +150,7 @@ export ANTHROPIC_API_KEY="your-key"
 complexity-cli analyze-pr "https://github.com/owner/repo/pull/123" --provider anthropic
 
 # Use a specific Anthropic model
-complexity-cli analyze-pr "https://github.com/owner/repo/pull/123" --provider anthropic --model claude-sonnet-4-5
+complexity-cli analyze-pr "https://github.com/owner/repo/pull/123" --provider anthropic --model claude-sonnet-5-5
 
 # Output as markdown
 complexity-cli analyze-pr "https://github.com/owner/repo/pull/123" --format markdown
