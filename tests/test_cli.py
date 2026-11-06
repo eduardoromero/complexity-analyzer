@@ -98,7 +98,7 @@ class TestAnalyzePrCommand:
             "complexity": 5,
             "explanation": "Medium",
             "provider": "gemini",
-            "model": "gemini-flash-latest",
+            "model": "gemini-3.8-flash",
         }
 
         with patch.dict("os.environ", {"GEMINI_API_KEY": "gemini-secret"}, clear=True):
@@ -123,7 +123,7 @@ class TestAnalyzePrCommand:
             "complexity": 3,
             "explanation": "Low",
             "provider": "gemini",
-            "model": "gemini-flash-latest",
+            "model": "gemini-3.8-flash",
         }
 
         result = runner.invoke(
@@ -201,7 +201,7 @@ class TestAnalyzePrCommand:
             "complexity": 4,
             "explanation": "Medium",
             "provider": "gemini",
-            "model": "gemini-flash-latest",
+            "model": "gemini-3.8-flash",
         }
 
         with patch.dict("os.environ", {"OPENAI_API_KEY": "sk-ambient-secret"}, clear=True):

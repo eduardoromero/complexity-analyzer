@@ -289,11 +289,11 @@ class TestAnalysisConfigValidation:
         """Test a Gemini-flavoured config carries provider, model and key."""
         config = AnalysisConfig(
             provider="gemini",
-            model="gemini-flash-latest",
+            model="gemini-3.8-flash",
             gemini_key="AIza-test-key",
         )
         assert config.provider == "gemini"
-        assert config.model == "gemini-flash-latest"
+        assert config.model == "gemini-3.8-flash"
         assert config.gemini_key == "AIza-test-key"
         assert config.openai_key is None
         assert config.anthropic_key is None
